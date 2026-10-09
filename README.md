@@ -6,6 +6,8 @@ Find what you need. Or just look around.
 
 ## API 快速开始
 
+可读文档位于 `/docs`，按技能、留言、密钥和系统分组，展示参数与可复制的 PowerShell / cURL 示例。页面右上角仍可下载 OpenAPI JSON，供 Postman 等工具导入。
+
 接口前缀 `/api/v1`。以下示例使用 Bash/curl；Windows 请用 `curl.exe`，或使用下方 PowerShell 示例。`BASE` 替换为自己的 SkillHub 地址。
 
 ```bash

@@ -1,0 +1,28 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { ArrowDownToLine, ArrowLeft, Check, Copy, Search } from 'lucide-react';
+import { docOperations, docFields, docExample, groups } from '@/lib/api-docs';
+
+const statuses:Record<string,string>={'200':'成功','201':'创建成功','400':'参数或包格式无效','401':'工作区不可用或密钥无效','403':'权限不足或跨站写入','404':'记录或版本不存在','409':'版本冲突或密钥数量达到上限','413':'请求或文件过大','415':'请求内容类型错误','500':'服务错误','503':'数据库不可用'};
+export default function ApiDocs() {
+  const [selected,setSelected]=useState('get-skills'),[query,setQuery]=useState(''),[origin,setOrigin]=useState('http://127.0.0.1:5173');
+  const [language,setLanguage]=useState<'curl'|'powershell'>('powershell'),[copied,setCopied]=useState(false),[copyError,setCopyError]=useState('');
+  useEffect(()=>{setOrigin(window.location.origin);const sync=()=>{const hash=window.location.hash.slice(1);if(docOperations.some(d=>d.anchor===hash))setSelected(hash);};sync();window.addEventListener('hashchange',sync);return()=>window.removeEventListener('hashchange',sync);},[]);
+  useEffect(()=>{setCopied(false);setCopyError('');},[selected,language]);
+  useEffect(()=>{if(!copied)return;const timer=setTimeout(()=>setCopied(false),2000);return()=>clearTimeout(timer);},[copied]);
+  const doc=docOperations.find(d=>d.anchor===selected)??docOperations[0],fields=docFields(doc),example=docExample(doc,origin,language);
+  const visible=docOperations.filter(d=>(d.title+' '+d.method+' '+d.path).toLowerCase().includes(query.toLowerCase()));
+  const copy=async()=>{try{await navigator.clipboard.writeText(example);setCopied(true);setCopyError('');}catch{setCopyError('无法访问剪贴板，请选择示例文字手动复制。');}};
+  return <div className="docs-shell">
+    <header className="docs-header"><a className="text-btn" href="/"><ArrowLeft size={15}/>返回 SkillHub</a><span>开发者文档</span><a className="docs-spec" href="/api/v1/openapi.json" download="skillhub-openapi.json"><ArrowDownToLine size={14}/>下载规范 JSON</a></header>
+    <div className="docs-layout"><aside className="docs-nav"><label className="docs-search"><Search size={15}/><input aria-label="搜索 API 文档" placeholder="搜索接口" value={query} onChange={e=>setQuery(e.target.value)}/></label><nav aria-label="API 接口目录">{groups.map(group=>{const items=visible.filter(d=>d.group===group);return items.length?<section key={group}><h2>{group}</h2>{items.map(d=><a href={'#'+d.anchor} key={d.key} aria-current={selected===d.anchor?'page':undefined} onClick={()=>setSelected(d.anchor)}><span className={'docs-verb '+d.method.toLowerCase()}>{d.method}</span>{d.title}</a>)}</section>:null;})}{!visible.length&&<p className="muted">没有匹配的接口</p>}</nav></aside>
+    <main className="docs-content"><div className="docs-title"><p>SkillHub API / {doc.group}</p><h1>{doc.title}</h1><div className="docs-route"><span className={'docs-verb '+doc.method.toLowerCase()}>{doc.method}</span><code>/api/v1{doc.path}</code></div></div>
+      <p className="docs-context">{doc.key==='POST /skills'?'仅接受标准 ZIP 包。发布新版本时指定已有技能 ID，版本必须递增；已发布版本不可覆盖。':doc.path.startsWith('/keys')?'使用当前工作区管理密钥，调用这些接口时不要携带另一个 Bearer Key。':doc.key==='POST /messages'?'内容以纯文本保存，署名仅用于显示。便签位置和全文会在读取时保留。':doc.path.endsWith('/download')?'下载指定版本的完整 ZIP，保留原始上传资源。示例技能的 catalog-markdown 包仅包含 SKILL.md。':doc.path.endsWith('/file')?'直接返回 UTF-8 Markdown 文本，使用 X-Skill-Digest 与 ETag 标识内容。':'接口地址使用当前 SkillHub 服务，可直接复制下面的示例调用。'}</p>
+      <section className="docs-section"><div className="docs-section-heading"><h2>调用示例</h2><div className="docs-tabs" aria-label="示例语言"><button aria-pressed={language==='powershell'} onClick={()=>setLanguage('powershell')}>PowerShell</button><button aria-pressed={language==='curl'} onClick={()=>setLanguage('curl')}>cURL</button></div></div><div className="docs-code"><button className="docs-copy" onClick={copy} aria-label="复制调用示例">{copied?<Check size={14}/>:<Copy size={14}/>}<span aria-live="polite">{copied?'已复制':'复制'}</span></button><pre><code>{example}</code></pre></div>{copyError&&<p className="docs-context" role="status">{copyError}</p>}{doc.path.includes('{id}')&&<p className="docs-caption">将示例中的 {doc.group==='留言'?'MESSAGE_ID':doc.group==='密钥'?'KEY_ID':'my-skill'} 替换为实际 ID。</p>}</section>
+      <section className="docs-section"><h2>请求参数</h2>{fields.length?<table className="docs-table"><thead><tr><th>字段</th><th>位置 / 类型</th><th>说明</th></tr></thead><tbody>{fields.map(f=><tr key={f.location+f.name}><td><code>{f.name}</code>{f.required&&<small className="docs-required">必填</small>}</td><td>{f.location}<small>{f.schema.format==='binary'?'文件':f.schema.type}</small></td><td>{f.description}{f.rules&&<small>{f.rules}</small>}</td></tr>)}</tbody></table>:<p className="docs-context">无需参数。</p>}</section>
+      <section className="docs-section"><h2>响应</h2><p className="docs-context">{doc.path==='/openapi.json'?'直接返回 OpenAPI 3.1 JSON 规范，可导入 Postman 等工具。':doc.path.endsWith('/download')||doc.path==='/package-template'?'返回 application/zip 文件。':doc.path.endsWith('/file')?'返回 text/markdown 文本。':'JSON 成功结果位于 data 字段；分页列表包含 items、total、offset、limit 与 nextOffset，最后一页 nextOffset 为 null。'}错误返回 <code>{'{ "error": { "code": "…", "message": "…" } }'}</code>。</p><details className="docs-status"><summary>HTTP 状态码</summary><dl>{Object.keys(doc.operation.responses).map(code=><div key={code}><dt>{code}</dt><dd>{statuses[code]??doc.operation.responses[code].description}</dd></div>)}</dl></details></section>
+      <section className="docs-section docs-auth"><h2>身份与权限</h2><p>当前使用固定工作区，无需登录。API Key 可选：read 只读，write 支持读写；传入密钥后会验证权限。创建密钥时 data.token 仅返回一次，请及时保存。</p><code>Authorization: Bearer sg_YOUR_API_KEY</code><p>共享工作区中的收藏、留言和密钥由访问者共同使用。浏览器写操作需同源，CLI 可直接调用。</p></section>
+    </main></div>
+  </div>;
+}
