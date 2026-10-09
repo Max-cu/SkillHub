@@ -1,0 +1,11 @@
+services:
+  app:
+    environment:
+      SKILLHUB_AI_ENABLED: 'true'
+      SKILLHUB_AI_BASE_URL: http://10.2.98.242:31015/v1
+      SKILLHUB_AI_MODEL: deepSeek-v4-pro
+      SKILLHUB_AI_TIMEOUT_SECONDS: '90'
+    networks: [qa, ai-live-egress]
+networks:
+  ai-live-egress:
+    labels: {skillhub-purpose: cas-qa}

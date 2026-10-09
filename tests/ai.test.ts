@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { zipSync,strToU8 } from 'fflate';
+import { readAiConfig,parseAiResult,inspectAiArchive,callAi } from '../lib/ai-service.mjs';
+test('AI endpoint is operator configured and disabled until enabled',()=>{
+ assert.equal(readAiConfig({}).enabled,false);
+ const env={SKILLHUB_AI_ENABLED:'true',SKILLHUB_AI_BASE_URL:'http://10.2.98.250:8010/v1',SKILLHUB_AI_MODEL:'qwen3.5'};
+ assert.equal(readAiConfig(env).model,'qwen3.5');
+ for(const base of ['http://user:secret@localhost/v1','file:///v1','http://host/v1?target=x','http://host/other'])assert.throws(()=>readAiConfig({...env,SKILLHUB_AI_BASE_URL:base}));
+});
+test('AI outputs must have complete bounded enum-based schemas',()=>{
+ assert.deepEqual(parseAiResult('{"decision":"approve","reason":"用途合理，内容完整且未发现明显违规。"}','review').decision,'approve');
+ for(const raw of ['yes','{"decision":"approve"}','{"decision":"approve","reason":"abcde","skill_id":"other"}','{"decision":"approve","reason":true}','{"decision":"PASS","reason":"valid reason"}'])assert.throws(()=>parseAiResult(raw,'review'));
+ assert.throws(()=>parseAiResult('{"summary":"abcdefghijklmnopqrst","category":"root","tags":[]}','summary'));
+ assert.equal(parseAiResult('```json\n{"summary":"这是一项用于自动整理企业内部资料的文档技能，适合撰写工作说明。","category":"documentation","tags":["文档"]}\n```','summary').category,'documentation');
+});
+test('AI archive extraction binds the exact digest and marks incomplete/binary inputs',()=>{
+ const bytes=zipSync({'SKILL.md':strToU8('Full instructions'),'scripts/run.py':strToU8('print("test")'),'image.bin':new Uint8Array([0,255])});
+ const digest='sha256:'+createHash('sha256').update(bytes).digest('hex');
+ const input=inspectAiArchive(bytes,digest);assert.equal(input.complete,false);assert.equal(input.texts.length,2);assert.equal(input.files.length,3);
+ assert.throws(()=>inspectAiArchive(bytes,'sha256:wrong'));
+});
+test('AI calls never follow redirects or accept truncated/invalid success bodies',async()=>{
+ const config=readAiConfig({SKILLHUB_AI_ENABLED:'true',SKILLHUB_AI_BASE_URL:'http://ai-mock:8124/v1',SKILLHUB_AI_MODEL:'qwen3.5'});
+ const valid={choices:[{finish_reason:'stop',message:{content:'{"decision":"approve","reason":"内容用途明确且未发现不合规行为。"}'}}]};
+ assert.equal((await callAi(config,'review',{texts:[]},async(url,options)=>{assert.equal(url,'http://ai-mock:8124/v1/chat/completions');assert.ok(options);assert.equal(options.redirect,'error');assert.equal(JSON.parse(options.body as string).tools,undefined);return Response.json(valid);})).decision,'approve');
+ await assert.rejects(callAi(config,'review',{},async()=>Response.json({...valid,choices:[{...valid.choices[0],finish_reason:'length'}]})));
+ await assert.rejects(callAi(config,'review',{},async()=>new Response('bad gateway',{status:502})));
+});

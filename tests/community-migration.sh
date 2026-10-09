@@ -37,3 +37,14 @@ DO $$ BEGIN
 END $$;
 SQL
 echo 'COMMUNITY_MIGRATION_PASS; existing owner, IDs, notes, ZIP bytes and sessions retained; default user; old uploads private'
+docker exec "$qa" psql -U skillhub_admin -d skillhub_migration_qa -v ON_ERROR_STOP=1 -c "UPDATE auth_users SET role='admin' WHERE id='cas:fixture';" >/dev/null
+docker exec -i "$qa" psql -U skillhub_admin -d skillhub_migration_qa -v ON_ERROR_STOP=1 < postgres/migrations/0004_ai_workflows.sql >/dev/null
+docker exec -i "$qa" psql -U skillhub_admin -d skillhub_migration_qa -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+DO $$ BEGIN
+ IF (SELECT role FROM auth_users WHERE id='cas:fixture') <> 'admin' THEN RAISE EXCEPTION 'Manual admin role lost'; END IF;
+ IF (SELECT ai_status FROM versions WHERE skill_id='old-private') <> 'unprocessed' THEN RAISE EXCEPTION 'Old upload unexpectedly queued'; END IF;
+ IF (SELECT count(*) FROM ai_jobs) <> 0 THEN RAISE EXCEPTION 'Synthetic AI job created'; END IF;
+ IF (SELECT encode(content,'hex') FROM package_chunks WHERE skill_id='old-private') <> '0001ff' THEN RAISE EXCEPTION 'Original bytes changed'; END IF;
+END $$;
+SQL
+echo 'AI_MIGRATION_PASS; manually assigned admin role and original package retained; old records not automatically sent to AI'

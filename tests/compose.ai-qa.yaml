@@ -1,0 +1,19 @@
+services:
+  app:
+    environment:
+      SKILLHUB_AI_ENABLED: 'true'
+      SKILLHUB_AI_BASE_URL: http://ai-mock:8124/v1
+      SKILLHUB_AI_MODEL: qwen3.5
+      SKILLHUB_AI_TIMEOUT_SECONDS: '5'
+    depends_on:
+      ai-mock: {condition: service_healthy}
+  ai-mock:
+    image: skillhub:cas-candidate
+    command: [node, tests/ai-mock.mjs]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8124/v1/models').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks: [qa]
+    labels: {skillhub-purpose: cas-qa}

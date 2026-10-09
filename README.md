@@ -2,7 +2,7 @@
 
 Find what you need. Or just look around.
 
-极简 PC 技能库：私有 ZIP 上传、管理员审核社区发布、搜索、收藏、不可变版本、原包下载、API Key，以及支持管理员删除便签的留言白板。React + GSAP；UI 与外部程序调用同一套 REST API。发布只接收 ZIP，永不支持 GitHub 导入、URL 或直接 Markdown 发布。
+极简 PC 技能库：私有 ZIP 上传、内网 AI 审核社区发布、搜索、收藏、不可变版本、原包下载、API Key，以及支持管理员删除便签的留言白板。React + GSAP；UI 与外部程序调用同一套 REST API。发布只接收 ZIP，永不支持 GitHub 导入、URL 或直接 Markdown 发布。
 
 ## API 快速开始
 
@@ -153,6 +153,28 @@ docker compose exec -T skillhub node scripts/set-role.mjs --subject EXACT_CAS_AC
 角色修改在下一次 API 请求立即生效，已有 Cookie 和 Key 不会保留旧管理员权限。刷新网页可显示或隐藏“管理”入口。默认所有现有及新账号都是 user，本次上线不会替你指定任何管理员。
 
 历史版本原先没有独立展示元数据，本次迁移按迁移时的技能信息回填；原 SKILL.md 和 ZIP 字节保持不变。此后的版本会各自保存不可变元数据，审核与社区展示使用该版本的快照。
+
+### 内网 AI 整理与审核
+
+使用服务器配置的 OpenAI-compatible 内网端点；本部署为 `http://10.2.98.242:31015/v1`，模型 ID `deepSeek-v4-pro`。只在服务器发起请求，配置和可选 Key 不进入前端。
+
+- 上传原始 ZIP 后立即返回，PG 队列异步生成简介、五类中的一个分类和最多五个标签。`data.aiStatus` 为 queued / running / ready / error；原始声明保留在 `originalDescription`，原 SKILL.md、脚本和 ZIP 不重写。AI 失败先显示上传声明。
+- 点击卡片“发布到社区”后异步审核该精确版本的文本资源。模型明确返回完整、合法的 approve 结果时直接入社区；reject 驳回；manual、输出无效、接口失败保持待审核，可由管理员处理或用户重试。二进制文件和超出完整文本读取范围的包需人工核对，不伪称完整 AI 审核。
+- 审核记录包含 `decisionSource / aiStatus / aiModel`，PG 内记录原包摘要和审核报告。已经通过的展示信息保持冻结，新版本重新整理和审核。人工决定或撤回会取消在途任务，旧 AI 结果不能覆盖。
+- 管理员可在技能详情中下架社区内容。社区列表、其他用户收藏、原文及下载立即不可见，用户私有原包仍保留。下架限制会阻止同一技能自动再次发布；管理员解除限制后仍需重新提交审核。
+- 后台一次处理一个任务，任务和租约持久化，应用重启后继续；网络失败重试一次，随后保留原资料/待人工状态。不会执行上传脚本，不把包发到公开扫描网站。
+
+```bash
+# 所有者重试私有版本的 AI 整理（已通过版本不改写）
+curl -fsS "$BASE/api/v1/skills/$SKILL_ID/ai" -H "Authorization: Bearer $SKILLHUB_API_KEY" -H 'Content-Type: application/json' --data '{"version":"1.0.0"}'
+# 所有者重试失败或待人工的 AI 审核
+curl -fsS -X POST "$BASE/api/v1/skills/$SKILL_ID/reviews/REVIEW_ID/ai-retry" -H "Authorization: Bearer $SKILLHUB_API_KEY"
+# 管理员下架 / 解除限制（解除不会立即重新发布）
+curl -fsS -X DELETE "$BASE/api/v1/admin/skills/$SKILL_ID/community" -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY" -H 'Content-Type: application/json' --data '{"reason":"内容不合规"}'
+curl -fsS "$BASE/api/v1/admin/skills/$SKILL_ID/community/unblock" -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY" -H 'Content-Type: application/json' --data '{"reason":"已确认整改"}'
+```
+
+服务器忽略的 `.env` 可配置：`SKILLHUB_AI_ENABLED=true`、`SKILLHUB_AI_BASE_URL`、`SKILLHUB_AI_MODEL`、`SKILLHUB_AI_TIMEOUT_SECONDS`（默认 90，5–180）、可选 `SKILLHUB_AI_API_KEY`。未启用时保持人工审核与上传声明。模型服务离线不导致上传失败，也不会把失败当通过。
 
 ### ZIP 上传字段与格式
 
@@ -362,6 +384,8 @@ CAS 模拟回归使用 `tests/compose.cas-qa.yaml` 和 `tests/cas-integration.mj
 2026-10-09 的 CAS 版本 `0.4.0` 已部署到现有服务器。类型检查、24 项单元测试与 136 项隔离模拟检查通过；应用重启后 PG 中的会话继续有效。正式环境验证未登录业务 API 返回 401，原业务表数据校验一致，两个产品的数据库容器均未重建或重启。用户已用一个真实公司账号确认登录、退出、重新登录、技能详情与留言板正常；两个真实账号的交叉权限验收尚未进行，双账号结果目前来自隔离模拟测试。
 
 同日 `0.5.0` 已更新到现有服务器：24 项单元测试、136 项登录回归、128 项三账号权限模拟、旧数据迁移检查和会话重启检查通过。正式环境验证未登录的新管理与社区 API 返回 401，原有业务数据校验一致，SkillHub / SkillGo 数据库容器均未改变。未在正式库创建测试技能、便签或审核记录，未指定任何管理员。管理和私有库的三账号结果来自隔离模拟；真实管理员 UI 需要使用者手动指定角色后验证。
+
+同日 `0.6.0` 已上线内网 AI 工作流。用户选择 `http://10.2.98.242:31015/v1` 提供的 `deepSeek-v4-pro`。类型检查、28 项单元测试、136 项 CAS 回归、128 项私有库与管理员检查、66 项模拟 AI 工作流检查、迁移及重启检查通过；另有 15 项真实模型全流程检查通过（隔离数据库、两个模拟身份、人工编写的无业务数据样例），验证总结/分类/标签、AI 自动批准与 ZIP 字节保留。正式环境后台进程、鉴权和原数据校验通过，手工指定的 `yuanjiaju` 管理员身份保留，SkillGo 数据库容器未改动。真实模型验收与模拟身份测试分别记录，不将模拟账号当成真实公司双账号验收。
 
 旧工作区服务器回归使用 `tests/compose.pg-qa.yaml`：独立 `skillhub-pg-qa` 项目、私有测试网络、测试 PG 卷和单独测试密码，无宿主机端口。不要对正式库执行会写数据的测试。单元测试覆盖 ZIP 完整性、大小、路径、版本、便签以及防误连配置；API 测试覆盖 PG 中的原包下载、并发版本、收藏、Key 权限和留言持久化。
 

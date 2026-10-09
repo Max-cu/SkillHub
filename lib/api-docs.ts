@@ -12,7 +12,7 @@ const titles: Record<string, string> = {
   'GET /messages/{id}':'留言全文', 'GET /keys':'密钥列表', 'POST /keys':'创建密钥',
   'DELETE /keys/{id}':'撤销密钥', 'GET /health':'健康检查', 'GET /meta':'工作区信息',
   'GET /openapi.json':'OpenAPI 规范',
-  'DELETE /messages/{id}':'管理员删除便签','POST /skills/{id}/community':'提交社区审核','DELETE /skills/{id}/community':'撤回社区','GET /skills/{id}/reviews':'我的审核记录','GET /admin/reviews':'社区审核列表','GET /admin/reviews/{id}':'审核记录','GET /admin/reviews/{id}/skill':'查看提交版本','GET /admin/reviews/{id}/file':'读取提交原文','GET /admin/reviews/{id}/package':'查看提交包内容','GET /admin/reviews/{id}/download':'下载提交版本','POST /admin/reviews/{id}/decision':'通过或驳回审核','GET /auth/login':'公司登录', 'POST /auth/cas/exchange':'交换登录票据', 'GET /auth/me':'当前登录身份', 'POST /auth/logout':'退出登录',
+  'POST /skills/{id}/ai':'重试 AI 整理','POST /skills/{id}/reviews/{reviewId}/ai-retry':'重试 AI 审核','DELETE /admin/skills/{id}/community':'管理员下架社区技能','POST /admin/skills/{id}/community/unblock':'解除下架限制','DELETE /messages/{id}':'管理员删除便签','POST /skills/{id}/community':'提交社区审核','DELETE /skills/{id}/community':'撤回社区','GET /skills/{id}/reviews':'我的审核记录','GET /admin/reviews':'社区审核列表','GET /admin/reviews/{id}':'审核记录','GET /admin/reviews/{id}/skill':'查看提交版本','GET /admin/reviews/{id}/file':'读取提交原文','GET /admin/reviews/{id}/package':'查看提交包内容','GET /admin/reviews/{id}/download':'下载提交版本','POST /admin/reviews/{id}/decision':'通过或驳回审核','GET /auth/login':'公司登录', 'POST /auth/cas/exchange':'交换登录票据', 'GET /auth/me':'当前登录身份', 'POST /auth/logout':'退出登录',
 };
 const descriptions: Record<string, string> = {
   q:'搜索名称、描述或标签。', category:'技能分类。', favorites:'只查看工作区收藏，设为 true。',
@@ -54,11 +54,11 @@ export function docFields(doc:DocOperation) {
   ].filter(Boolean).join(' · ')}));
 }
 export function docExample(doc:DocOperation, origin:string, language:'curl'|'powershell') {
-  const id=doc.path.startsWith('/admin')?'REVIEW_ID':doc.group==='留言'?'MESSAGE_ID':doc.group==='密钥'?'KEY_ID':'my-skill';
-  let url=origin+'/api/v1'+doc.path.replace('{id}',id);
+  const id=doc.path.startsWith('/admin/skills')?'SKILL_ID':doc.path.startsWith('/admin')?'REVIEW_ID':doc.group==='留言'?'MESSAGE_ID':doc.group==='密钥'?'KEY_ID':'my-skill';
+  let url=origin+'/api/v1'+doc.path.replace('{id}',id).replace('{reviewId}','REVIEW_ID');
   if(doc.key==='GET /skills')url+='?scope=mine&q=react&limit=12';
   if(!doc.path.startsWith('/admin')&&['/file','/package','/download'].some(p=>doc.path.endsWith(p)))url+='?version=1.0.0';
-  const body=doc.key==='POST /skills/{id}/community'?{version:'1.0.0'}:doc.key==='POST /admin/reviews/{id}/decision'?{decision:'approve',reason:'审核通过'}:doc.key==='POST /messages'?{content:'通过 API 留下一张便签',author:'Alex',color:'yellow',position:{x:0.35,y:0.6}}:doc.key==='POST /keys'?{name:'my-integration',scope:'read'}:doc.key==='POST /auth/cas/exchange'?{ticket:'ST-REPLACE-WITH-ONE-TIME-TICKET',service:origin+'/'}:null;
+  const body=doc.path.startsWith('/admin/skills')?{reason:'管理员处理不合规社区内容'}:(doc.key==='POST /skills/{id}/community'||doc.key==='POST /skills/{id}/ai')?{version:'1.0.0'}:doc.key==='POST /admin/reviews/{id}/decision'?{decision:'approve',reason:'审核通过'}:doc.key==='POST /messages'?{content:'通过 API 留下一张便签',author:'Alex',color:'yellow',position:{x:0.35,y:0.6}}:doc.key==='POST /keys'?{name:'my-integration',scope:'read'}:doc.key==='POST /auth/cas/exchange'?{ticket:'ST-REPLACE-WITH-ONE-TIME-TICKET',service:origin+'/'}:null;
   const session=doc.group==='密钥'||doc.group==='认证',protectedCall=!['/health','/openapi.json'].includes(doc.path)&&doc.group!=='认证';
   if(doc.key==='GET /auth/login')return language==='powershell'?`Start-Process "${url}"`:`# 在浏览器打开\n# ${url}`;
   const cookieName=origin.startsWith('https:')?'__Host-skillhub_session':'skillhub_cas_session';
