@@ -5,15 +5,22 @@ import { api } from '@/lib/client-api';
 import type { Skill } from '@/lib/types';
 import type { Review } from '@/lib/community';
 const labels={pending:'待审核',approved:'已通过',rejected:'已驳回',withdrawn:'已撤回'};
+export function CardCommunityButton({skill,notify,onSubmitted}:{skill:Pick<Skill,'id'|'name'|'version'|'reviewStatus'>;notify:(message:string)=>void;onSubmitted:()=>void}) {
+  const [busy,setBusy]=useState(false),[pending,setPending]=useState(false);
+  useEffect(()=>{setPending(false);},[skill.id,skill.version,skill.reviewStatus]);
+  const status=pending?'pending':skill.reviewStatus;
+  const label=busy?'提交中…':status==='pending'?'待审核':status==='approved'?'已发布':status==='rejected'?'重新提交':'发布到社区';
+  const submit=async()=>{if(busy||status==='pending'||status==='approved')return;setBusy(true);try{await api('skills/'+skill.id+'/community',{method:'POST',body:JSON.stringify({version:skill.version})});setPending(true);notify('已提交社区审核，通过后对其他用户可见');onSubmitted();}catch(e){notify((e as Error).message);}finally{setBusy(false);}};
+  return <button className="card-community" disabled={busy||status==='pending'||status==='approved'} onClick={submit} aria-label={`${label} ${skill.name} v${skill.version}`} title={`提交 v${skill.version}，管理员审核通过后进入社区`}>{busy&&<Loader2 size={12} className="spin"/>}{label}</button>;
+}
 export function CommunityControls({skill,version,onChanged}:{skill:Skill;version:string;onChanged:()=>void}) {
   const [reviews,setReviews]=useState<Review[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[confirm,setConfirm]=useState(false),[revision,setRevision]=useState(0);
   useEffect(()=>{let live=true;api<Review[]>('skills/'+skill.id+'/reviews').then(r=>{if(live)setReviews(r);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[skill.id,revision]);
   const current=reviews.find(r=>r.version===version);
-  const act=async(withdraw=false)=>{setBusy(true);setError('');try{await api('skills/'+skill.id+'/community',{method:withdraw?'DELETE':'POST',...(withdraw?{}:{body:JSON.stringify({version})})});setConfirm(false);setRevision(v=>v+1);onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  const withdraw=async()=>{setBusy(true);setError('');try{await api('skills/'+skill.id+'/community',{method:'DELETE'});setConfirm(false);setRevision(v=>v+1);onChanged();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
   return <div className="community-controls"><div><strong>社区发布</strong><span>{current?`v${version} · ${labels[current.status]}`:'仅自己可见'}{skill.communityVersion?` · 社区当前 v${skill.communityVersion}`:''}</span>{current?.reason&&<p>审核说明：{current.reason}</p>}</div><div className="community-buttons">
-    <button className="secondary-btn" disabled={busy||current?.status==='pending'||current?.status==='approved'} onClick={()=>act()}>{busy&&<Loader2 size={14} className="spin"/>}提交 v{version} 审核</button>
     {(skill.communityVersion||reviews.some(r=>r.status==='pending'))&&<button className="text-btn" disabled={busy} onClick={()=>setConfirm(true)}>撤回社区</button>}
-  </div>{confirm&&<div className="inline-confirm"><span>撤回所有社区版本和待审核申请？私有技能保留。</span><button className="text-btn" disabled={busy} onClick={()=>act(true)}>确认撤回</button><button className="text-btn" onClick={()=>setConfirm(false)}>取消</button></div>}{error&&<p className="form-error" role="alert">{error}</p>}</div>;
+  </div>{confirm&&<div className="inline-confirm"><span>撤回所有社区版本和待审核申请？私有技能保留。</span><button className="text-btn" disabled={busy} onClick={withdraw}>确认撤回</button><button className="text-btn" onClick={()=>setConfirm(false)}>取消</button></div>}{error&&<p className="form-error" role="alert">{error}</p>}</div>;
 }
 export function ReviewDecision({review,onDone}:{review:Review;onDone:()=>void}) {
   const [reason,setReason]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
