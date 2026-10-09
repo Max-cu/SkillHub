@@ -1,0 +1,23 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { getPool, assertDatabase } from '../db/postgres.mjs';
+
+if (process.env.SKILLHUB_MIGRATION_QA !== 'isolated') throw new Error('Migration verification requires the dedicated isolated QA environment.');
+const origin='http://127.0.0.1:3356/api/v1';
+const request=async path => (await (await fetch(origin+path)).json()).data;
+const health=await request('/health');assert.equal(health.database,'PostgreSQL');
+const info=await request('/skills/qa-migration-skill/package');assert.equal(info.kind,'uploaded');assert.equal(info.files.length,3);
+const download=Buffer.from(await (await fetch(origin+'/skills/qa-migration-skill/download?version=1.0.0')).arrayBuffer());
+assert.ok(download.equals(readFileSync(process.argv[2])),'SQLite ZIP survives PostgreSQL migration byte-for-byte');
+const note=await request('/messages/qa-migration-message');assert.deepEqual(note.position,{x:.35,y:.6});assert.equal(note.author,'Fixture');assert.ok(note.content.includes('\nSecond line <script>plain text</script>'));
+assert.ok((await request('/skills?favorites=true')).items.some(skill=>skill.id==='qa-migration-skill'));
+const auth={Authorization:'Bearer sg_disposable_migration_fixture_key_only'};
+assert.equal((await fetch(origin+'/skills',{headers:auth})).status,200);
+assert.equal((await fetch(origin+'/messages',{method:'POST',headers:{...auth,'Content-Type':'application/json'},body:'{"content":"must be denied"}'})).status,403);
+assert.equal((await fetch(origin+'/recipes')).status,404);
+const pool=getPool();await assertDatabase();
+const {rows}=await pool.query("SELECT rolname,rolsuper,rolcreatedb,rolcreaterole FROM pg_roles WHERE rolname=current_user");
+assert.equal(rows[0].rolsuper,false);assert.equal(rows[0].rolcreatedb,false);assert.equal(rows[0].rolcreaterole,false);
+assert.equal((await pool.query("SELECT count(*)::integer AS total FROM package_chunks WHERE skill_id='qa-migration-skill'")).rows[0].total,3);
+await pool.end();
+console.log('PASS: PostgreSQL migration preserves exact multi-chunk ZIP, note coordinates/content, favorites, key hash/scope and legacy storage; application role is restricted.');

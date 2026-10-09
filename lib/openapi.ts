@@ -7,7 +7,7 @@ const id=(name:string)=>({name,in:'path',required:true,schema:string});
 const requestBody=(properties:Record<string,unknown>,required:string[])=>({required:true,content:{'application/json':{schema:{type:'object',properties,required}}}});
 const security=[{bearerAuth:[]},{}];
 export const openapi={
-  openapi:'3.1.0',info:{title:'SkillHub API',version:'0.2.0',description:'All active product operations use this API. Loopback and explicitly configured shared origins use the fixed local-workspace identity; no login integration is configured. Shared deployments have no user isolation and require a trusted network. Bearer keys retain read/write scopes. Browser mutations require a same-origin Origin when present and reject cross-site requests. Login is a UI placeholder. ZIP publication only; no GitHub imports or recipes.'},
+  openapi:'3.1.0',info:{title:'SkillHub API',version:'0.3.0',description:'All active product operations use this API. Data is stored in dedicated PostgreSQL, isolated from SkillGo. Loopback and explicitly configured shared origins use the fixed local-workspace identity; no login integration is configured. Shared deployments have no user isolation and require a trusted network. Bearer keys retain read/write scopes. Browser mutations require a same-origin Origin when present and reject cross-site requests. Login is a UI placeholder. ZIP publication only; no GitHub imports or recipes.'},
   servers:[{url:'/api/v1'}],components:{securitySchemes:{bearerAuth:{type:'http',scheme:'bearer',description:'Optional for the local workspace; sg_… read/write API keys. Key administration uses the local workspace, not another key.'}}},
   paths:{
     '/health':{get:{summary:'Check database availability',responses:{200:ok,503:error}}},

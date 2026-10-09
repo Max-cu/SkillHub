@@ -11,18 +11,16 @@ FROM ${NODE_IMAGE} AS runtime
 ENV NODE_ENV=production \
     SKILLHUB_PORT=3356 \
     SKILLHUB_HOST=0.0.0.0 \
-    SKILLHUB_DATA_DIR=/data \
-    CLOUDFLARE_CF_FETCH_ENABLED=false \
-    WRANGLER_SEND_METRICS=false \
     NO_COLOR=1
 WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
-COPY --from=build --chown=node:node /app/drizzle ./drizzle
+COPY --from=build --chown=node:node /app/postgres ./postgres
+COPY --from=build --chown=node:node /app/db ./db
 COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/tests ./tests
 COPY --from=build --chown=node:node /app/package.json ./package.json
-RUN mkdir -p /data /app/.sites-runtime && chown -R node:node /data /app/.sites-runtime
+RUN mkdir -p /app/outputs && chown node:node /app/outputs
 USER node
 EXPOSE 3356
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \

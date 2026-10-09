@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+test "$POSTGRES_DB" = skillhub
+test "$POSTGRES_USER" = skillhub_admin
+test -n "$SKILLHUB_APP_PASSWORD"
+psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set=ON_ERROR_STOP=1 --set=app_password="$SKILLHUB_APP_PASSWORD" <<'SQL'
+CREATE ROLE skillhub_app LOGIN PASSWORD :'app_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+REVOKE CONNECT ON DATABASE skillhub FROM PUBLIC;
+GRANT CONNECT ON DATABASE skillhub TO skillhub_app;
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE, CREATE ON SCHEMA public TO skillhub_app;
+SQL

@@ -179,58 +179,89 @@ $note = @{content='一个想法';author='小林';color='green';position=@{x=0.4;
 Invoke-RestMethod -Method Post "$base/api/v1/messages" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($note))
 ```
 
-## 本机开发
+## PostgreSQL 与产品隔离
 
-需要 Node.js >= **22.13**，建议 Node 22 LTS。无需 Sites、Cloudflare 账号或云端数据库。全新克隆：
+服务器版使用 **PostgreSQL 16 + 原生 Node.js**，不再通过 Worker/D1 模拟器运行。技能信息、版本、收藏、留言、Key 摘要和原始 ZIP（bytea 分块）都存入 PG。
+
+SkillHub 与 SkillGo 完全分开：
+
+| 项目 | SkillHub 固定配置 |
+| --- | --- |
+| Compose 项目 | `skillhub` |
+| PG 服务 / DNS | `skillhub-postgres` |
+| 数据库 | `skillhub` |
+| 应用账号 | `skillhub_app`，非超级用户，无建库/建角色权限 |
+| 初始化管理账号 | `skillhub_admin`，不供网页应用使用 |
+| PG 数据卷 | `skillhub-pg-data` |
+| PG 私有网络 | `skillhub-pg`，internal；不连接 SkillGo 网络 |
+| 网页 / API | 3356；PG 不开放服务器端口 |
+
+应用只读取 `SKILLHUB_DATABASE_URL`，不读取通用 `DATABASE_URL` 或 `PG*` 环境变量。连接前强制校验专用库名、账号和服务地址；启动、迁移时确认真实数据库身份及非超级用户权限。应用不能使用 SkillGo 的 `db` / `skillgo-db-1` 地址。不要复用 SkillGo 的账号、密码、容器、数据卷或网络。
+
+## Docker 自托管
+
+需要 Docker、Docker Compose；Node.js >= 22.13 用于本机生成配置。首次部署：
 
 ```bash
 git clone https://github.com/Max-cu/SkillHub.git
 cd SkillHub
-npm ci
-npm run build
-npm run db:migrate
-npm run dev -- --hostname 127.0.0.1
-```
-
-开发地址 `http://127.0.0.1:5173/`；`npm start` 启动编译版，默认 `http://127.0.0.1:3356/`。开发和默认编译版共享 `.wrangler/state/`。迁移命令记录已执行 SQL，重跑只应用未执行的迁移。
-
-旧开发工作区曾手工执行 SQL 的数据库没有自动迁移记录，勿重新应用全部迁移；先备份并核对 schema。全新克隆和 Docker 部署使用自动迁移记录。
-
-## Docker 自托管
-
-需要 Docker 和 Docker Compose。默认端口 3356，使用独立容器和数据卷：
-
-```bash
-cp deploy.env.example .env
-# 编辑 .env：填写实际服务器 origin，必须匹配协议、主机和端口，无尾部斜杠。
+npm run setup:env -- http://192.0.2.10:3356
+# 修改 .env 中的实际访问地址。必须匹配协议、主机和端口，无尾部斜杠。
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 skillhub
 ```
 
-`SKILLHUB_WORKSPACE_ORIGINS` 可用逗号分隔多个明确的地址，不接受通配符。这个配置只是共享工作区入口，没有登录保护。`.env` 不提交到 Git。
+`setup:env` 生成两份独立随机 PG 密码并保存到忽略的 `.env`，不在终端展示；已有配置不会覆盖。不要把 `.env` 或数据库备份提交到 Git。`SKILLHUB_WORKSPACE_ORIGINS` 可以逗号分隔多个明确地址，不接受通配符。
 
-容器使用非 root 用户，提供编译后的页面，没有 Vite HMR；启动自动应用未执行迁移。`skillhub-data` 数据卷保存数据库、上传包、版本、收藏、留言和 Key。容器自动重启，有健康检查和日志限制。
+网页应用使用非 root 用户和受限 PG 账号；PG 初始化管理账号仅用于建角色和运维。容器有健康检查、自动重启和日志限制。启动自动运行带校验和及迁移锁的 SQL 迁移，重复启动不重复建表。PG 数据持久化于 `skillhub-pg-data`；更新代码不删除数据。
 
 ```bash
-# 更新不删除数据
+# 更新
 git pull --ff-only
 docker compose up -d --build
 
-# 备份：短暂停服务，复制完整数据卷
+# 备份 SkillHub 专用数据库，不连接 SkillGo
 mkdir -p backups
-docker compose stop skillhub
-docker compose run --rm --no-deps --user root \
-  -v "$PWD/backups:/backup" skillhub \
-  tar -czf /backup/skillhub-data.tar.gz -C /data .
-docker compose start skillhub
+docker compose exec -T skillhub-postgres \
+  pg_dump -U skillhub_admin -d skillhub -Fc > backups/skillhub.dump
 ```
 
-不要运行 `docker compose down -v`，它会删除数据。恢复时停止服务，把备份解压回同一数据卷，再启动。数据库 ID 和持久化路径不能在常规更新中任意更换。
+备份包含 Key 摘要、留言和上传原包，请妥善保存。恢复前先停止 SkillHub 网页服务，使用该专用 PG 容器中的 `pg_restore` 恢复到 SkillHub 数据库。不要执行 `docker compose down -v`，它会删除 PG 数据卷。首次初始化后的账号密码已经存入 PG，修改 `.env` 不会自动完成密码轮换。
 
-网络受限时可在 `.env` 设置 `NODE_IMAGE / NPM_REGISTRY` 镜像源，仍保留包锁完整性和 TLS 校验。原生启动支持 `SKILLHUB_PORT / SKILLHUB_HOST / SKILLHUB_DATA_DIR / SKILLHUB_WORKSPACE_ORIGINS`。
+网络受限时可设置 `NODE_IMAGE / NPM_REGISTRY / SKILLHUB_PG_IMAGE` 镜像源，保持 TLS 和包锁完整性校验。Vinext 当前仍为 beta；数据库驱动为 node-postgres，使用真实 PG 连接池及事务。
 
-自托管使用 Miniflare/Workerd 的本地 Worker + D1 兼容运行模式（Wrangler 仅负责迁移），数据是服务器上的 SQLite 文件，不使用云端 D1。这不是官方生产托管方案；当前面向内网共享服务，Vinext 仍为 beta。以后接入公网或正式认证时，应选择对应运行时和认证方案。
+## 本机 Node/Vite 开发
+
+只考虑 PC。需要 Node.js >= 22.13 和本机 Docker。开发 PG 仅绑定 `127.0.0.1:5433`，与其他默认 5432 数据库区分：
+
+```bash
+npm ci
+npm run setup:env
+# 只在本机使用 compose.dev.yaml；服务器不要使用它。
+docker compose -f compose.yaml -f compose.dev.yaml up -d --wait skillhub-postgres
+```
+
+在本机 `.env` 添加 `SKILLHUB_DATABASE_URL=postgresql://skillhub_app:<本项目应用密码>@127.0.0.1:5433/skillhub`，密码取自同一文件的 `SKILLHUB_PG_APP_PASSWORD`。然后：
+
+```bash
+npm run db:migrate
+npm run dev -- --hostname 127.0.0.1
+# 或 npm run build && npm start，编译版默认端口 3356
+```
+
+开发地址 `http://127.0.0.1:5173/`；UI 与 API 保持同一套实现。服务从 `.env` 加载配置。不要把本机开发 URL 覆盖到服务器配置中。
+
+## 从旧 SQLite/D1 迁移
+
+旧 `drizzle/` 目录仅保留历史 SQLite SQL；PG 使用 `postgres/migrations/`。两套迁移不能交叉执行。旧 `skillhub-data` 卷不要删除，留作回滚。
+
+1. 在独立测试环境验证 PG 版本；保留旧镜像、Compose 配置和数据。
+2. 切换前暂停 **SkillHub** 写入，用 `scripts/export-sqlite.py` 对其专用业务 SQLite 文件生成一致性备份及 JSON 导出；不要选择 Miniflare 的 metadata.sqlite，更不能选择 SkillGo 数据。
+3. 初始化新的独立 SkillHub PG，并运行 `npm run db:migrate`。
+4. 从只读挂载的导出文件执行 `node scripts/import-sqlite.mjs /migration/skillhub-export.json`。
+5. 导入器仅接受空的 SkillHub 目标库，事务内逐表验证数量及完整内容（含 ZIP 二进制、Key 摘要和便签坐标）。遇到不一致整体回滚；已导入的同一快照不会重复写入。
+6. 验证通过后启动 SkillHub PG 版。需要回滚时恢复旧 SkillHub 镜像和旧数据卷，不能操作 SkillGo。
 
 ## 验证与许可
 
@@ -238,13 +269,13 @@ docker compose start skillhub
 npm run typecheck
 npm test
 npm run build
-# 在 loopback 开发服务上执行 API 回归，会生成测试技能/留言
+# 只在 loopback 的测试数据库运行，会生成测试技能/留言
 node tests/api-integration.mjs
 node tests/board-integration.mjs
 ```
 
-测试覆盖 ZIP 资源与完整性、路径与大小、版本、便签、来源白名单，以及原包下载、并发发布、收藏、Key 权限、跨站限制、留言持久化和分页。API 回归仅允许 loopback，清理文件写入忽略的 `outputs/`。
+服务器回归使用 `tests/compose.pg-qa.yaml`：独立 `skillhub-pg-qa` 项目、私有测试网络、测试 PG 卷和单独测试密码，无宿主机端口。不要对正式库执行会写数据的测试。单元测试覆盖 ZIP 完整性、大小、路径、版本、便签以及防误连配置；API 测试覆盖 PG 中的原包下载、并发版本、收藏、Key 权限和留言持久化。
 
 7 个静态公开 SKILL.md 快照用于演示，不联网同步，也不是完整上游包；其 ZIP 只含 SKILL.md，`package.kind=catalog-markdown`，用户上传包为 `uploaded`。适用 Agent 和许可证由发布者声明；网页不执行技能、不安装到本机 Agent 目录。
 
-应用代码采用 [MIT](LICENSE)。上游快照与第三方代码保留原许可，见 [上游许可](docs/UPSTREAM-LICENSES.md)、[调研记录](docs/RESEARCH.md) 和 `build/sites-vite-plugin.LICENSE`。天辰公司和 SkillGo 的 Logo/商标不属于 MIT 软件授权，权利归各自所有者。仓库不包含用户数据库、API Key、SSH 凭据、私有 Sites 标识或本机测试产物。
+应用代码采用 [MIT](LICENSE)。上游快照与第三方代码保留原许可，见 [上游许可](docs/UPSTREAM-LICENSES.md)、[调研记录](docs/RESEARCH.md) 和 `build/sites-vite-plugin.LICENSE`。天辰公司和 SkillGo 的 Logo/商标不属于 MIT 软件授权，权利归各自所有者。仓库不包含用户数据库、API Key、SSH 凭据或本机测试产物。

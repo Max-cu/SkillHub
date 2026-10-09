@@ -13,13 +13,40 @@ services:
       - "${SKILLHUB_BIND_IP:-0.0.0.0}:${SKILLHUB_PORT:-3356}:3356"
     environment:
       SKILLHUB_WORKSPACE_ORIGINS: ${SKILLHUB_WORKSPACE_ORIGINS:?Set the exact server origin in .env}
-    volumes:
-      - skillhub-data:/data
+      SKILLHUB_DATABASE_URL: postgresql://skillhub_app:${SKILLHUB_PG_APP_PASSWORD:?Generate an independent app password}@skillhub-postgres:5432/skillhub
+    depends_on:
+      skillhub-postgres:
+        condition: service_healthy
+    networks: [skillhub-front, skillhub-pg]
     logging:
       driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
+      options: {max-size: "10m", max-file: "3"}
+  skillhub-postgres:
+    image: ${SKILLHUB_PG_IMAGE:-postgres:16-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: skillhub
+      POSTGRES_USER: skillhub_admin
+      POSTGRES_PASSWORD: ${SKILLHUB_PG_ADMIN_PASSWORD:?Generate an independent admin password}
+      SKILLHUB_APP_PASSWORD: ${SKILLHUB_PG_APP_PASSWORD:?Generate an independent app password}
+    volumes:
+      - skillhub-pg-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [skillhub-pg]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U skillhub_admin -d skillhub"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "3"}
+networks:
+  skillhub-front:
+    name: skillhub-front
+  skillhub-pg:
+    name: skillhub-pg
+    internal: true
 volumes:
-  skillhub-data:
-    name: skillhub-data
+  skillhub-pg-data:
+    name: skillhub-pg-data
