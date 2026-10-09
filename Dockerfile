@@ -18,6 +18,7 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/postgres ./postgres
 COPY --from=build --chown=node:node /app/db ./db
 COPY --from=build --chown=node:node /app/scripts ./scripts
+COPY --from=build --chown=node:node /app/lib/cas-config.mjs ./lib/cas-config.mjs
 COPY --from=build --chown=node:node /app/tests ./tests
 COPY --from=build --chown=node:node /app/package.json ./package.json
 RUN mkdir -p /app/outputs && chown node:node /app/outputs

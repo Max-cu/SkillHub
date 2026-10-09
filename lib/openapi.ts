@@ -5,14 +5,18 @@ const response={200:ok,400:error,401:error,403:error,404:error,409:error,413:err
 const query=(name:string,schema:object={type:'string'})=>({name,in:'query',schema});
 const id=(name:string)=>({name,in:'path',required:true,schema:string});
 const requestBody=(properties:Record<string,unknown>,required:string[])=>({required:true,content:{'application/json':{schema:{type:'object',properties,required}}}});
-const security=[{bearerAuth:[]},{}];
+const security=[{bearerAuth:[]},{sessionCookie:[]}];
 export const openapi={
-  openapi:'3.1.0',info:{title:'SkillHub API',version:'0.3.0',description:'All active product operations use this API. Data is stored in dedicated PostgreSQL, isolated from SkillGo. Loopback and explicitly configured shared origins use the fixed local-workspace identity; no login integration is configured. Shared deployments have no user isolation and require a trusted network. Bearer keys retain read/write scopes. Browser mutations require a same-origin Origin when present and reject cross-site requests. Login is a UI placeholder. ZIP publication only; no GitHub imports or recipes.'},
-  servers:[{url:'/api/v1'}],components:{securitySchemes:{bearerAuth:{type:'http',scheme:'bearer',description:'Optional for the local workspace; sg_… read/write API keys. Key administration uses the local workspace, not another key.'}}},
+  openapi:'3.1.0',info:{title:'SkillHub API',version:'0.4.0',description:'The registry and board require a verified company CAS session or a user-owned read/write API key. Skills and notes are shared with authenticated company users. Favorites and API keys belong to the current account; only the publisher may update a skill. Legacy workspace records are not assigned to the first login. Data and 8-hour sessions use dedicated SkillHub PostgreSQL, isolated from SkillGo. Browser writes require same-origin requests. ZIP publication only; no GitHub imports or recipes. Logout ends this local session and redirects to CAS; CAS Single Logout is not implemented.'},
+  servers:[{url:'/api/v1'}],security,components:{securitySchemes:{bearerAuth:{type:'http',scheme:'bearer',description:'sg_… read/write API keys, created after CAS login. Keys cannot manage other keys.'},sessionCookie:{type:'apiKey',in:'cookie',name:'skillhub_cas_session',description:'HttpOnly random CAS session. HTTPS deployments use __Host-skillhub_session with Secure. Expires after 8 hours by default.'}}},
   paths:{
-    '/health':{get:{summary:'Check database availability',responses:{200:ok,503:error}}},
-    '/meta':{get:{summary:'Categories, counts and workspace mode; loginConfigured=false',responses:response}},
-    '/openapi.json':{get:{summary:'Machine-readable API contract',responses:{200:{description:'This OpenAPI document'}}}},
+    '/auth/login':{get:{summary:'Start company CAS login in a browser; sets a short-lived HttpOnly login-attempt cookie',security:[],parameters:[query('service',{type:'string',description:'Optional; must exactly equal the configured canonical service URL'})],responses:{302:{description:'Redirect to company CAS with the exact canonical service'},400:error}}},
+    '/auth/cas/exchange':{post:{summary:'Exchange a one-time CAS service ticket for an HttpOnly SkillHub session; requires login-attempt cookie and same-origin Origin',security:[],requestBody:requestBody({ticket:{type:'string',description:'One-time ST ticket, never log or store in browser storage'},service:{type:'string',description:'Exact configured callback URL including trailing /'}},['ticket','service']),responses:{200:ok,400:error,401:error,403:error,502:error,503:error}}},
+    '/auth/me':{get:{summary:'Read browser session identity; anonymous returns authenticated=false',security:[],responses:{200:ok,503:error}}},
+    '/auth/logout':{post:{summary:'Revoke local session and return a fixed CAS logoutUrl; requires same-origin Origin; idempotent, no CAS Single Logout',security:[],responses:{200:ok,403:error}}},
+    '/health':{get:{summary:'Check database availability',security:[],responses:{200:ok,503:error}}},
+    '/meta':{get:{summary:'Categories, counts and current CAS identity; loginConfigured=true',responses:response}},
+    '/openapi.json':{get:{summary:'Machine-readable API contract',security:[],responses:{200:{description:'This OpenAPI document'}}}},
     '/package-template':{get:{summary:'Download a valid example ZIP package',responses:{200:{description:'Example ZIP with SKILL.md and a reference',content:{'application/zip':{schema:{type:'string',format:'binary'}}}}}}},
     '/messages':{
       get:{summary:'List board notes, newest first; returns items,total,offset,limit,nextOffset',security,parameters:[query('offset',{type:'integer',minimum:0,default:0}),query('limit',{type:'integer',minimum:1,maximum:100,default:12})],responses:response},
@@ -29,7 +33,7 @@ export const openapi={
     '/skills/{id}/package':{get:{summary:'Read version-specific ZIP digest, file list, size, root and provenance kind',parameters:[id('id'),query('version')],responses:response}},
     '/skills/{id}/download':{get:{summary:'Download exact original uploaded ZIP, preserving resources',parameters:[id('id'),query('version')],responses:{200:{description:'ZIP attachment with X-Package-Digest and ETag. Existing catalog-markdown examples are synthetic ZIPs containing only SKILL.md; package.kind distinguishes them.',content:{'application/zip':{schema:{type:'string',format:'binary'}}}},404:error}}},
     '/skills/{id}/favorite':{put:{summary:'Add favorite (idempotent)',parameters:[id('id')],security,responses:response},delete:{summary:'Remove favorite (idempotent)',parameters:[id('id')],security,responses:response}},
-    '/keys':{get:{summary:'List workspace key metadata; secrets never returned',responses:response},post:{summary:'Create read/write key; token returned only once',requestBody:requestBody({name:{type:'string',maxLength:60},scope:{type:'string',enum:['read','write'],default:'read'}},['name']),responses:{...response,201:ok}}},
-    '/keys/{id}':{delete:{summary:'Revoke local workspace key',parameters:[id('id')],responses:response}},
+    '/keys':{get:{summary:'List current account key metadata; requires CAS session, secrets never returned',security:[{sessionCookie:[]}],responses:response},post:{summary:'Create own read/write key; requires CAS session, token returned only once',security:[{sessionCookie:[]}],requestBody:requestBody({name:{type:'string',maxLength:60},scope:{type:'string',enum:['read','write'],default:'read'}},['name']),responses:{...response,201:ok}}},
+    '/keys/{id}':{delete:{summary:'Revoke own key; requires CAS session',security:[{sessionCookie:[]}],parameters:[id('id')],responses:response}},
   },
 };

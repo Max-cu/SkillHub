@@ -12,6 +12,10 @@ services:
     ports:
       - "${SKILLHUB_BIND_IP:-0.0.0.0}:${SKILLHUB_PORT:-3356}:3356"
     environment:
+      SKILLHUB_AUTH_MODE: cas
+      SKILLHUB_CAS_SERVICE: ${SKILLHUB_CAS_SERVICE:?Set the exact CAS callback ending in /}
+      SKILLHUB_CAS_BASE_URL: ${SKILLHUB_CAS_BASE_URL:-https://cas.china-tcc.com/cas}
+      SKILLHUB_CAS_SESSION_TTL_SECONDS: ${SKILLHUB_CAS_SESSION_TTL_SECONDS:-28800}
       SKILLHUB_WORKSPACE_ORIGINS: ${SKILLHUB_WORKSPACE_ORIGINS:?Set the exact server origin in .env}
       SKILLHUB_DATABASE_URL: postgresql://skillhub_app:${SKILLHUB_PG_APP_PASSWORD:?Generate an independent app password}@skillhub-postgres:5432/skillhub
     depends_on:

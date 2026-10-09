@@ -1,5 +1,15 @@
-import { pgTable, text, integer, doublePrecision, customType, primaryKey, index, foreignKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, doublePrecision, customType, primaryKey, index, foreignKey, timestamp } from 'drizzle-orm/pg-core';
 const bytea = customType<{data:Buffer}>({dataType:()=> 'bytea'});
+export const authUsers=pgTable('auth_users',{
+  id:text('id').primaryKey(),casSubject:text('cas_subject').notNull().unique(),displayName:text('display_name').notNull(),
+  createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),updatedAt:timestamp('updated_at',{withTimezone:true}).notNull().defaultNow(),
+});
+export const authSessions=pgTable('auth_sessions',{
+  tokenHash:text('token_hash').primaryKey(),userId:text('user_id').notNull().references(()=>authUsers.id),
+  createdAt:timestamp('created_at',{withTimezone:true}).notNull().defaultNow(),expiresAt:timestamp('expires_at',{withTimezone:true}).notNull(),
+},t=>[index('auth_sessions_expiry_idx').on(t.expiresAt)]);
+export const authAttempts=pgTable('auth_attempts',{tokenHash:text('token_hash').primaryKey(),expiresAt:timestamp('expires_at',{withTimezone:true}).notNull()});
+export const authTickets=pgTable('auth_tickets',{ticketHash:text('ticket_hash').primaryKey(),expiresAt:timestamp('expires_at',{withTimezone:true}).notNull()});
 
 export const skills = pgTable('skills', {
   id: text('id').primaryKey(), name: text('name').notNull(), description: text('description').notNull(),

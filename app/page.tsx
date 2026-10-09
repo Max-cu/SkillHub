@@ -1,2 +1,3 @@
 import SkillHub from './skillhub';
-export default function Home() { return <SkillHub />; }
+import AuthGate from './auth-gate';
+export default function Home() { return <AuthGate><SkillHub /></AuthGate>; }

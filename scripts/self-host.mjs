@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { readAuthConfig } from '../lib/cas-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 process.chdir(root);
@@ -19,6 +20,7 @@ if (mode === 'migrate') {
   for (const signal of ['SIGINT','SIGTERM']) process.on(signal, () => child.kill(signal));
   child.on('exit', code => { process.exitCode = code ?? 1; });
 } else {
+  readAuthConfig();
   const { assertDatabase } = await import('../db/postgres.mjs');
   await assertDatabase();
   // Use Vinext's native Node server; no local Worker simulator or SQLite.

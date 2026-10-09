@@ -7,6 +7,7 @@ import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
 import { inspectPackage, markdownPackage, packageTemplate, MAX_ZIP_BYTES, type PackageInfo } from './package';
 import { workspaceMode } from './workspace';
+import { authConfig, handleAuth, sessionIdentity, checkBrowserMutation } from './auth';
 
 const now = () => new Date().toISOString();
 const db = getDb;
@@ -21,26 +22,28 @@ export function seedCatalog() {
     await database.batch(statements);
   })().catch(error => { seeded = undefined; throw error; });
 }
-type Identity = { userId: string; scope: 'read' | 'write'; email?: string; kind: 'key' | 'local' };
+type Identity = { userId: string; scope: 'read' | 'write'; displayName?:string; email?: string; kind: 'key' | 'local' | 'session' };
+const identities=new WeakMap<Request,Identity|null>();
 async function identity(request: Request, required = false, write = false): Promise<Identity | null> {
+  const config=authConfig();
   const auth = request.headers.get('authorization');
   let result: Identity | null = null;
-  if (auth) {
+  if(identities.has(request))result=identities.get(request)??null;
+  else if (auth) {
     if (!auth.startsWith('Bearer sg_')) throw new ApiError(401, 'invalid_key', 'API Key 无效');
     const hash = await digest(auth.slice(7));
-    const key = await db().prepare('SELECT user_id,scope FROM api_keys WHERE hash=$1').bind(hash).first<{user_id:string;scope:'read'|'write'}>();
+    const key = await db().prepare('SELECT k.user_id,k.scope FROM api_keys k '+(config.mode==='cas'?'JOIN auth_users u ON u.id=k.user_id ':'')+'WHERE k.hash=$1').bind(hash).first<{user_id:string;scope:'read'|'write'}>();
     if (!key) throw new ApiError(401, 'invalid_key', 'API Key 无效或已撤销');
     result = { userId: key.user_id, scope: key.scope, kind: 'key' };
   } else {
-    if (workspaceMode(new URL(request.url), process.env.SKILLHUB_WORKSPACE_ORIGINS)) result = {userId:'local-workspace',scope:'write',kind:'local'};
+    if(config.mode==='cas')result=await sessionIdentity(request);
+    else if (workspaceMode(new URL(request.url))==='local') result = {userId:'local-workspace',displayName:'本地工作区',scope:'write',kind:'local'};
   }
+  identities.set(request,result);
   if (required && !result) throw new ApiError(401, 'sign_in_required', '请先登录后使用此功能');
   if (write && result) {
     if (result.scope !== 'write') throw new ApiError(403, 'insufficient_scope', '该 API Key 只有读取权限');
-    if (result.kind === 'local') {
-      const origin = request.headers.get('origin');
-      if ((origin && origin !== new URL(request.url).origin) || request.headers.get('sec-fetch-site') === 'cross-site') throw new ApiError(403, 'origin_mismatch', '浏览器写操作必须来自本站');
-    }
+    if (result.kind !== 'key') checkBrowserMutation(request,config.mode==='cas'?new URL(config.service).origin:undefined);
   }
   return result;
 }
@@ -59,19 +62,20 @@ function mapMessage({positionX,positionY,...row}:MessageRow):BoardMessage {
 }
 const latestOrder = `split_part(v2.version,'.',1)::integer DESC, split_part(v2.version,'.',2)::integer DESC, split_part(v2.version,'.',3)::integer DESC`;
 const skillQuery = `SELECT s.*,v.version,v.markdown,v.digest,(SELECT count(*)::integer FROM favorites f WHERE f.skill_id=s.id) AS favorite_count FROM skills s JOIN versions v ON v.skill_id=s.id AND v.version=(SELECT v2.version FROM versions v2 WHERE v2.skill_id=s.id ORDER BY ${latestOrder} LIMIT 1)`;
+const visibleOwner = ()=>authConfig().mode==='cas'?"(s.owner='upstream-catalog' OR EXISTS(SELECT 1 FROM auth_users u WHERE u.id=s.owner))":'true';
 function mapSkill(row: Record<string, unknown>, favoriteIds: string[] = []): Skill {
   const markdown = row.markdown as string;
   return { id: row.id as string, name: row.name as string, description: row.description as string, category: row.category as Skill['category'], agents: JSON.parse(row.agents as string), tags: JSON.parse(row.tags as string), source: row.source as string, sourcePath: row.source_path as string, commit: row.commit as string | null, license: row.license as string, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
 }
 async function allSkills(userId?: string) {
   const [rows, fav] = await Promise.all([
-    db().prepare(skillQuery).all<Record<string, unknown>>(),
+    db().prepare(skillQuery+' WHERE '+visibleOwner()).all<Record<string, unknown>>(),
     userId ? db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1').bind(userId).all<{skill_id:string}>() : Promise.resolve({results:[]}),
   ]);
   return rows.results.map(r => mapSkill(r, fav.results.map(f => f.skill_id)));
 }
 async function getSkill(id: string, userId?: string) {
-  const row = await db().prepare(skillQuery + ' WHERE s.id=$1').bind(id).first<Record<string, unknown>>();
+  const row = await db().prepare(skillQuery + ' WHERE s.id=$1 AND '+visibleOwner()).bind(id).first<Record<string, unknown>>();
   if (!row) throw new ApiError(404, 'skill_not_found', '技能不存在');
   const favorited = userId ? await db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(userId, id).first() : null;
   return mapSkill(row, favorited ? [id] : []);
@@ -150,8 +154,11 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.3.0', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.4.0', database: 'PostgreSQL' });
     }
+    const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
+    // The entire registry and board require a CAS session or a user-owned API key.
+    await identity(request,true);
     if (method==='GET' && path.length===1 && path[0]==='package-template') {const bytes=packageTemplate();return zipResponse(bytes,'my-skill.zip',await digest(bytes));}
     await seedCatalog();
     if (path[0] === 'messages') {
@@ -180,7 +187,7 @@ export async function handle(request: Request) {
     }
     if (method === 'GET' && path[0] === 'meta') {
       const user = await identity(request); const list = await allSkills(user?.userId);
-      return json({ agents: AGENTS, categories: CATEGORIES, skillCount: list.length, sourceCount: new Set(list.filter(s => s.source).map(s => s.source)).size, favoriteCount: list.filter(s => s.favorite).length, workspace: user?.kind==='local'?workspaceMode(url,process.env.SKILLHUB_WORKSPACE_ORIGINS):null, loginConfigured:false, user: user ? { id:user.userId,email:user.email,scope:user.scope } : null });
+      return json({ agents: AGENTS, categories: CATEGORIES, skillCount: list.length, sourceCount: new Set(list.filter(s => s.source).map(s => s.source)).size, favoriteCount: list.filter(s => s.favorite).length, workspace: authConfig().mode==='cas'?'cas':'local', loginConfigured:authConfig().mode==='cas', user: user ? { id:user.userId,displayName:user.displayName,email:user.email,scope:user.scope } : null });
     }
     if (path[0] === 'skills' && !path[1] && method === 'GET') {
       const user = await identity(request, url.searchParams.get('favorites') === 'true'); let list = await allSkills(user?.userId);
@@ -203,7 +210,7 @@ export async function handle(request: Request) {
       if (method === 'GET' && path[2] === 'versions') { await getSkill(id); const result = await db().prepare('SELECT version,digest,changelog,created_at,"commit" FROM versions WHERE skill_id=$1').bind(id).all<{version:string}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
       if (method==='GET' && path.length===3 && ['file','download','package'].includes(path[2])) {
         const skill=await getSkill(id), version=url.searchParams.get('version')??skill.version, row=await snapshot(id,version);
-        if(path[2]==='file')return new Response(row.markdown,{headers:{'Content-Type':'text/markdown; charset=utf-8','ETag':'"'+row.digest+'"','X-Skill-Digest':row.digest,'X-Content-Type-Options':'nosniff'}});
+        if(path[2]==='file')return new Response(row.markdown,{headers:{'Content-Type':'text/markdown; charset=utf-8','ETag':'"'+row.digest+'"','X-Skill-Digest':row.digest,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
         const info=await packageInfo(id,version,row.markdown);
         if(path[2]==='package')return json({...info,skillId:id,version});
         let bytes:Uint8Array;
@@ -223,7 +230,7 @@ export async function handle(request: Request) {
     }
     if (path[0] === 'keys') {
       const user = await identity(request,true,method!=='GET');
-      if (user!.kind !== 'local') throw new ApiError(403,'session_required','API Key 管理需要工作区入口，不能使用其他 API Key');
+      if (user!.kind === 'key') throw new ApiError(403,'session_required','API Key 管理需要登录会话，不能使用其他 API Key');
       if (method === 'GET' && !path[1]) return json((await db().prepare('SELECT id,name,prefix,scope,created_at FROM api_keys WHERE user_id=$1 ORDER BY created_at DESC').bind(user!.userId).all()).results);
       if (method === 'POST' && !path[1]) {
         const input = await body(request), name = textInput(input.name,'名称',1,60), scope = input.scope ?? 'read';

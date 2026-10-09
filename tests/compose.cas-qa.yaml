@@ -1,0 +1,53 @@
+name: skillhub-cas-qa
+services:
+  app:
+    image: skillhub:cas-candidate
+    init: true
+    environment:
+      NODE_ENV: test
+      SKILLHUB_AUTH_TEST_MODE: isolated
+      SKILLHUB_AUTH_MODE: cas
+      SKILLHUB_CAS_SERVICE: http://127.0.0.1:3356/
+      SKILLHUB_CAS_BASE_URL: http://cas-mock:8123/cas
+      SKILLHUB_DATABASE_URL: postgresql://skillhub_app:${SKILLHUB_CAS_QA_APP_PASSWORD:?Dedicated QA password required}@skillhub-postgres:5432/skillhub
+    depends_on:
+      skillhub-postgres: {condition: service_healthy}
+      cas-mock: {condition: service_started}
+    networks: [qa]
+    labels: {skillhub-purpose: cas-qa}
+  cas-mock:
+    image: skillhub:cas-candidate
+    command: [node, tests/cas-mock.mjs]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8123/cas/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    environment:
+      CAS_MOCK_SERVICE: http://127.0.0.1:3356/
+    networks: [qa]
+    labels: {skillhub-purpose: cas-qa}
+  skillhub-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: skillhub
+      POSTGRES_USER: skillhub_admin
+      POSTGRES_PASSWORD: ${SKILLHUB_CAS_QA_ADMIN_PASSWORD:?Dedicated QA password required}
+      SKILLHUB_APP_PASSWORD: ${SKILLHUB_CAS_QA_APP_PASSWORD:?Dedicated QA password required}
+    volumes:
+      - qa-data:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [qa]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U skillhub_admin -d skillhub"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    labels: {skillhub-purpose: cas-qa}
+networks:
+  qa:
+    internal: true
+    labels: {skillhub-purpose: cas-qa}
+volumes:
+  qa-data:
+    labels: {skillhub-purpose: cas-qa}
