@@ -14,7 +14,7 @@ const server=http.createServer((req,res)=>{
   if(ticket.startsWith('ST-XML-')){res.end('<cas:serviceResponse>broken');return;}
   if(ticket.startsWith('ST-DTD-')){res.end('<!DOCTYPE x SYSTEM "file:///etc/passwd"><x/>');return;}
   if(ticket.startsWith('ST-Large-')){res.end('x'.repeat(66000));return;}
-  const subject=ticket.startsWith('ST-Alice-')?'alice':ticket.startsWith('ST-Bob-')?'bob':null;
+  const subject=ticket.startsWith('ST-Alice-')?'alice':ticket.startsWith('ST-Bob-')?'bob':ticket.startsWith('ST-Charlie-')?'charlie':null;
   if(!subject){res.end(`<cas:serviceResponse xmlns:cas="${namespace}"><cas:authenticationFailure code="INVALID_TICKET"/></cas:serviceResponse>`);return;}
   res.end(`<cas:serviceResponse xmlns:cas="${namespace}"><cas:authenticationSuccess><cas:user>${subject}</cas:user><cas:attributes><cas:displayName>${subject==='alice'?'用户甲':'用户乙'}</cas:displayName></cas:attributes></cas:authenticationSuccess></cas:serviceResponse>`);
 });

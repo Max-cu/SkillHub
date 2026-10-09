@@ -7,6 +7,7 @@ import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
 import { inspectPackage, markdownPackage, packageTemplate, MAX_ZIP_BYTES, type PackageInfo } from './package';
 import { workspaceMode } from './workspace';
+import { requireAdmin,decideReview,withdrawCommunity,type Review,type UserRole } from './community';
 import { authConfig, handleAuth, sessionIdentity, checkBrowserMutation } from './auth';
 
 const now = () => new Date().toISOString();
@@ -16,13 +17,14 @@ export function seedCatalog() {
   return seeded ??= (async () => {
     const database = db();
     const statements = catalog.flatMap(s => [
-      database.prepare('INSERT INTO skills (id,name,description,category,agents,tags,source,source_path,"commit",license,owner,featured,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING').bind(s.id, s.name, s.description, s.category, JSON.stringify(s.agents), JSON.stringify(s.tags), s.source, s.sourcePath, s.commit, s.license, 'upstream-catalog', +s.featured, s.createdAt),
+      database.prepare('INSERT INTO skills (id,slug,name,description,category,agents,tags,source,source_path,"commit",license,owner,featured,created_at) VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING').bind(s.id, s.name, s.description, s.category, JSON.stringify(s.agents), JSON.stringify(s.tags), s.source, s.sourcePath, s.commit, s.license, 'upstream-catalog', +s.featured, s.createdAt),
       database.prepare('INSERT INTO versions (skill_id,version,markdown,digest,"commit",changelog,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING').bind(s.id, s.version, s.markdown, s.digest, s.commit, 'Public upstream SKILL.md snapshot; auxiliary files are not bundled.', s.createdAt),
     ]);
+    for(const skill of catalog)statements.push(database.prepare("UPDATE skills SET community_version=$1 WHERE id=$2 AND owner='upstream-catalog' AND community_version IS NULL").bind(skill.version,skill.id));
     await database.batch(statements);
   })().catch(error => { seeded = undefined; throw error; });
 }
-type Identity = { userId: string; scope: 'read' | 'write'; displayName?:string; email?: string; kind: 'key' | 'local' | 'session' };
+type Identity = { userId: string; scope: 'read' | 'write'; displayName?:string; email?: string; role:UserRole; kind: 'key' | 'local' | 'session' };
 const identities=new WeakMap<Request,Identity|null>();
 async function identity(request: Request, required = false, write = false): Promise<Identity | null> {
   const config=authConfig();
@@ -32,12 +34,12 @@ async function identity(request: Request, required = false, write = false): Prom
   else if (auth) {
     if (!auth.startsWith('Bearer sg_')) throw new ApiError(401, 'invalid_key', 'API Key 无效');
     const hash = await digest(auth.slice(7));
-    const key = await db().prepare('SELECT k.user_id,k.scope FROM api_keys k '+(config.mode==='cas'?'JOIN auth_users u ON u.id=k.user_id ':'')+'WHERE k.hash=$1').bind(hash).first<{user_id:string;scope:'read'|'write'}>();
+    const key = await db().prepare('SELECT k.user_id,k.scope,'+(config.mode==='cas'?'u.role':"'user' AS role")+' FROM api_keys k '+(config.mode==='cas'?'JOIN auth_users u ON u.id=k.user_id ':'')+'WHERE k.hash=$1').bind(hash).first<{user_id:string;scope:'read'|'write';role:UserRole}>();
     if (!key) throw new ApiError(401, 'invalid_key', 'API Key 无效或已撤销');
-    result = { userId: key.user_id, scope: key.scope, kind: 'key' };
+    result = { userId: key.user_id, scope: key.scope, role:key.role,kind: 'key' };
   } else {
     if(config.mode==='cas')result=await sessionIdentity(request);
-    else if (workspaceMode(new URL(request.url))==='local') result = {userId:'local-workspace',displayName:'本地工作区',scope:'write',kind:'local'};
+    else if (workspaceMode(new URL(request.url))==='local') result = {userId:'local-workspace',displayName:'本地工作区',scope:'write',role:'user',kind:'local'};
   }
   identities.set(request,result);
   if (required && !result) throw new ApiError(401, 'sign_in_required', '请先登录后使用此功能');
@@ -61,46 +63,56 @@ function mapMessage({positionX,positionY,...row}:MessageRow):BoardMessage {
   return {...row,position:positionX===null||positionY===null?null:{x:positionX,y:positionY}};
 }
 const latestOrder = `split_part(v2.version,'.',1)::integer DESC, split_part(v2.version,'.',2)::integer DESC, split_part(v2.version,'.',3)::integer DESC`;
-const skillQuery = `SELECT s.*,v.version,v.markdown,v.digest,(SELECT count(*)::integer FROM favorites f WHERE f.skill_id=s.id) AS favorite_count FROM skills s JOIN versions v ON v.skill_id=s.id AND v.version=(SELECT v2.version FROM versions v2 WHERE v2.skill_id=s.id ORDER BY ${latestOrder} LIMIT 1)`;
-const visibleOwner = ()=>authConfig().mode==='cas'?"(s.owner='upstream-catalog' OR EXISTS(SELECT 1 FROM auth_users u WHERE u.id=s.owner))":'true';
-function mapSkill(row: Record<string, unknown>, favoriteIds: string[] = []): Skill {
-  const markdown = row.markdown as string;
-  return { id: row.id as string, name: row.name as string, description: row.description as string, category: row.category as Skill['category'], agents: JSON.parse(row.agents as string), tags: JSON.parse(row.tags as string), source: row.source as string, sourcePath: row.source_path as string, commit: row.commit as string | null, license: row.license as string, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
+const newestVersion = `(SELECT v2.version FROM versions v2 WHERE v2.skill_id=s.id ORDER BY ${latestOrder} LIMIT 1)`;
+const approvedVersion = `(EXISTS(SELECT 1 FROM community_reviews cr WHERE cr.skill_id=s.id AND cr.version=v.version AND cr.status='approved') OR (s.owner='upstream-catalog' AND v.version=s.community_version))`;
+const skillQuery = `SELECT s.*,v.version,v.markdown,v.digest,v.metadata,(SELECT count(*)::integer FROM favorites f WHERE f.skill_id=s.id) AS favorite_count,(SELECT cr.status FROM community_reviews cr WHERE cr.skill_id=s.id AND cr.version=v.version ORDER BY cr.created_at DESC LIMIT 1) AS review_status FROM skills s JOIN versions v ON v.skill_id=s.id`;
+function mapSkill(row: Record<string, unknown>, favoriteIds: string[] = [],viewer?:string): Skill {
+  const markdown = row.markdown as string, metadata=JSON.parse(row.metadata as string||'{}');
+  return { id: row.id as string,slug:row.slug as string,name:metadata.name??row.name, description:metadata.description??row.description, category:metadata.category??row.category, agents:metadata.agents??JSON.parse(row.agents as string), tags:metadata.tags??JSON.parse(row.tags as string), source: row.source as string, sourcePath:metadata.sourcePath??row.source_path, commit: row.commit as string | null, license:metadata.license??row.license, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, communityVersion:row.community_version as string|null,reviewStatus:viewer===row.owner?(row.review_status as Skill['reviewStatus']??null):null, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
 }
-async function allSkills(userId?: string) {
+async function allSkills(userId:string,scope='mine') {
+  if(!['mine','community','all'].includes(scope))throw new ApiError(400,'invalid_scope','scope 为 mine、community 或 all');
+  const chosen=scope==='community'?'s.community_version':`CASE WHEN s.owner=$1 THEN ${newestVersion} ELSE s.community_version END`;
+  const visible=scope==='mine'?'s.owner=$1':scope==='community'?'s.community_version IS NOT NULL':`(s.owner=$1 OR s.community_version IS NOT NULL)`;
   const [rows, fav] = await Promise.all([
-    db().prepare(skillQuery+' WHERE '+visibleOwner()).all<Record<string, unknown>>(),
-    userId ? db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1').bind(userId).all<{skill_id:string}>() : Promise.resolve({results:[]}),
+    db().prepare(skillQuery+` WHERE ${visible} AND v.version=${chosen}`+(scope==='community'?' AND $1::text IS NOT NULL':'')).bind(userId).all<Record<string, unknown>>(),
+    db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1').bind(userId).all<{skill_id:string}>(),
   ]);
-  return rows.results.map(r => mapSkill(r, fav.results.map(f => f.skill_id)));
+  return rows.results.map(r => mapSkill(r, fav.results.map(f => f.skill_id),userId));
 }
-async function getSkill(id: string, userId?: string) {
-  const row = await db().prepare(skillQuery + ' WHERE s.id=$1 AND '+visibleOwner()).bind(id).first<Record<string, unknown>>();
-  if (!row) throw new ApiError(404, 'skill_not_found', '技能不存在');
-  const favorited = userId ? await db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(userId, id).first() : null;
-  return mapSkill(row, favorited ? [id] : []);
+async function getSkill(id:string,userId:string,version?:string) {
+  const row=await db().prepare(skillQuery+` WHERE s.id=$1 AND (s.owner=$2 OR (s.community_version IS NOT NULL AND ${approvedVersion})) AND v.version=COALESCE($3,CASE WHEN s.owner=$2 THEN ${newestVersion} ELSE s.community_version END)`).bind(id,userId,version??null).first<Record<string,unknown>>();
+  if(!row)throw new ApiError(404,'skill_not_found','技能或可访问版本不存在');
+  const favorited=await db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(userId,id).first();
+  return mapSkill(row,favorited?[id]:[],userId);
+}
+const reviewQuery=`SELECT r.id,r.skill_id AS "skillId",r.version,r.status,r.reason,r.created_at AS "createdAt",r.reviewed_at AS "reviewedAt",r.submitter,u.display_name AS "displayName",v.metadata::json->>'name' AS name,v.metadata::json->>'description' AS description FROM community_reviews r JOIN auth_users u ON u.id=r.submitter JOIN versions v ON v.skill_id=r.skill_id AND v.version=r.version`;
+async function reviewSkill(reviewId:string) {
+  const review=await db().prepare('SELECT skill_id,version FROM community_reviews WHERE id=$1').bind(reviewId).first<{skill_id:string;version:string}>();
+  if(!review)throw new ApiError(404,'review_not_found','审核记录不存在');
+  const row=await db().prepare(skillQuery+' WHERE s.id=$1 AND v.version=$2').bind(review.skill_id,review.version).first<Record<string,unknown>>();
+  if(!row)throw new ApiError(404,'skill_not_found','审核版本不存在');return mapSkill(row);
 }
 function textInput(value: unknown, field: string, min = 1, max = 500) {
   if (typeof value !== 'string' || value.trim().length < min || value.length > max) throw new ApiError(400, 'invalid_input', `${field} 长度须为 ${min}–${max} 字符`);
   return value.trim();
 }
 async function publish(input: Record<string, unknown>, userId: string, archive: {bytes:Uint8Array;info:PackageInfo;filename:string;digest:string}) {
-  const s = validatePublish(input); const database = db(); const time = now();
-  const existing = await database.prepare('SELECT owner,source,source_path FROM skills WHERE id=$1').bind(s.id).first<{owner:string;source:string;source_path:string}>();
-  if (existing && existing.owner !== userId) throw new ApiError(403, 'not_owner', '该名称已被占用，请使用其他技能 ID');
-  if (existing) {
-    const previous = await getSkill(s.id);
-    if (compareVersion(s.version, previous.version) <= 0) throw new ApiError(409, 'version_conflict', '新版本必须高于当前版本；已发布版本不可覆盖');
-  }
-  const contentDigest = await digest(s.markdown);
-  const statements: PgStatement[] = [];
-  if (!existing) statements.push(database.prepare('INSERT INTO skills (id,name,description,category,agents,tags,source,source_path,"commit",license,owner,featured,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)').bind(s.id, s.name, s.description, s.category, JSON.stringify(s.agents), JSON.stringify(s.tags), '', archive.info.root + 'SKILL.md', null, s.license, userId, 0, time));
-  else statements.push(database.prepare('UPDATE skills SET description=$1,category=$2,agents=$3,tags=$4,license=$5,source=$6,source_path=$7,"commit"=$8 WHERE id=$9 AND owner=$10').bind(s.description, s.category, JSON.stringify(s.agents), JSON.stringify(s.tags), s.license, '', archive.info.root + 'SKILL.md', null, s.id, userId));
-  statements.push(database.prepare('INSERT INTO versions (skill_id,version,markdown,digest,"commit",changelog,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)').bind(s.id, s.version, s.markdown, contentDigest, null, s.changelog, time));
-  statements.push(database.prepare('INSERT INTO packages (skill_id,version,digest,size,filename,root,files) VALUES ($1,$2,$3,$4,$5,$6,$7)').bind(s.id,s.version,archive.digest,archive.bytes.length,archive.filename,archive.info.root,JSON.stringify(archive.info.files)));
-  for (let offset=0,index=0;offset<archive.bytes.length;offset+=512*1024,index++) statements.push(database.prepare('INSERT INTO package_chunks (skill_id,version,chunk_index,content) VALUES ($1,$2,$3,$4)').bind(s.id,s.version,index,archive.bytes.slice(offset,offset+512*1024).buffer));
-  try { await database.batch(statements); } catch (error) { if ((error as {code?:string}).code === '23505') throw new ApiError(409, 'version_conflict', '名称或版本已存在'); throw error; }
-  return getSkill(s.id, userId);
+  const s=validatePublish(input),database=db(),time=now();
+  const existing=await database.prepare('SELECT id,slug FROM skills WHERE owner=$1 AND (id=$2 OR slug=$2)').bind(userId,s.id).first<{id:string;slug:string}>();
+  if(!existing&&/^sk-[a-f0-9-]{36}$/.test(s.id))throw new ApiError(404,'skill_not_found','技能不存在');
+  const skillId=existing?.id??'sk-'+crypto.randomUUID(),slug=existing?.slug??s.id;
+  if(existing&&compareVersion(s.version,(await getSkill(skillId,userId)).version)<=0)throw new ApiError(409,'version_conflict','新版本必须高于当前版本；已上传版本不可覆盖');
+  const contentDigest=await digest(s.markdown),sourcePath=archive.info.root+'SKILL.md';
+  const metadata=JSON.stringify({name:s.name,description:s.description,category:s.category,agents:s.agents,tags:s.tags,license:s.license,sourcePath});
+  const statements:PgStatement[]=[];
+  if(!existing)statements.push(database.prepare('INSERT INTO skills(id,slug,name,description,category,agents,tags,source,source_path,"commit",license,owner,featured,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)').bind(skillId,slug,s.name,s.description,s.category,JSON.stringify(s.agents),JSON.stringify(s.tags),'',sourcePath,null,s.license,userId,0,time));
+  else statements.push(database.prepare('UPDATE skills SET name=$1,description=$2,category=$3,agents=$4,tags=$5,license=$6,source_path=$7 WHERE id=$8 AND owner=$9').bind(s.name,s.description,s.category,JSON.stringify(s.agents),JSON.stringify(s.tags),s.license,sourcePath,skillId,userId));
+  statements.push(database.prepare('INSERT INTO versions(skill_id,version,markdown,digest,"commit",changelog,created_at,metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8)').bind(skillId,s.version,s.markdown,contentDigest,null,s.changelog,time,metadata));
+  statements.push(database.prepare('INSERT INTO packages(skill_id,version,digest,size,filename,root,files) VALUES($1,$2,$3,$4,$5,$6,$7)').bind(skillId,s.version,archive.digest,archive.bytes.length,archive.filename,archive.info.root,JSON.stringify(archive.info.files)));
+  for(let offset=0,index=0;offset<archive.bytes.length;offset+=512*1024,index++)statements.push(database.prepare('INSERT INTO package_chunks(skill_id,version,chunk_index,content) VALUES($1,$2,$3,$4)').bind(skillId,s.version,index,archive.bytes.slice(offset,offset+512*1024).buffer));
+  try{await database.batch(statements);}catch(error){if((error as {code?:string}).code==='23505')throw new ApiError(409,'version_conflict','你的技能名称或版本已存在');throw error;}
+  return getSkill(skillId,userId);
 }
 async function upload(request: Request) {
   const type=request.headers.get('content-type')??'';
@@ -121,16 +133,24 @@ async function upload(request: Request) {
   input.agents??=[...AGENTS];input.tags??=[];
   return {input,archive:{bytes:archiveBytes,info,filename:file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,100)||'skill.zip',digest:await digest(archiveBytes)}};
 }
-async function snapshot(id:string,version:string) {
-  const row=await db().prepare('SELECT markdown,digest FROM versions WHERE skill_id=$1 AND version=$2').bind(id,version).first<{markdown:string;digest:string}>();
-  if(!row)throw new ApiError(404,'version_not_found','版本不存在');return row;
-}
 async function packageInfo(id:string,version:string,markdown:string) {
   const row=await db().prepare('SELECT digest,size,filename,root,files FROM packages WHERE skill_id=$1 AND version=$2').bind(id,version).first<{digest:string;size:number;filename:string;root:string;files:string}>();
   if(row)return {...row,files:JSON.parse(row.files),kind:'uploaded'};
   const bytes=markdownPackage(markdown);return {digest:await digest(bytes),size:bytes.length,filename:id+'.zip',root:'',files:[{path:'SKILL.md',size:new TextEncoder().encode(markdown).length}],kind:'catalog-markdown'};
 }
 const zipResponse=(bytes:Uint8Array,name:string,hash:string)=>new Response(Uint8Array.from(bytes).buffer,{headers:{'Content-Type':'application/zip','Content-Disposition':'attachment; filename="'+name+'"','X-Package-Digest':hash,'ETag':'"'+hash+'"','X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
+async function skillArtifact(skill:Skill,action:string) {
+  if(action==='file')return new Response(skill.markdown,{headers:{'Content-Type':'text/markdown; charset=utf-8','ETag':'"'+skill.digest+'"','X-Skill-Digest':skill.digest,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
+  const info=await packageInfo(skill.id,skill.version,skill.markdown);
+  if(action==='package')return json({...info,skillId:skill.id,version:skill.version});
+  let bytes:Uint8Array;
+  if(info.kind==='uploaded') {
+    const chunks=await db().prepare('SELECT content FROM package_chunks WHERE skill_id=$1 AND version=$2 ORDER BY chunk_index').bind(skill.id,skill.version).all<{content:number[]}>();
+    bytes=new Uint8Array(info.size);let at=0;for(const chunk of chunks.results){const content=new Uint8Array(chunk.content);bytes.set(content,at);at+=content.length;}
+    if(at!==info.size||await digest(bytes)!==info.digest)throw new ApiError(500,'package_corrupt','技能包存储校验失败');
+  }else bytes=markdownPackage(skill.markdown);
+  return zipResponse(bytes,skill.slug+'-'+skill.version+'.zip',info.digest);
+}
 export async function handle(request: Request) {
   try {
     // Read incoming bodies with strict size limits before parsing or validation.
@@ -154,27 +174,54 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.4.0', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.5.0', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
-    await identity(request,true);
+    const currentUser=(await identity(request,true))!;
     if (method==='GET' && path.length===1 && path[0]==='package-template') {const bytes=packageTemplate();return zipResponse(bytes,'my-skill.zip',await digest(bytes));}
     await seedCatalog();
+    if(path[0]==='admin') {
+      requireAdmin(currentUser.role);
+      if(path[1]!=='reviews')throw new ApiError(404,'route_not_found','管理员接口不存在');
+      if(method==='GET'&&path.length===2) {
+        const status=url.searchParams.get('status')??'pending';
+        if(!['pending','approved','rejected','withdrawn','all'].includes(status))throw new ApiError(400,'invalid_status','无效的审核状态');
+        const {offset,limit}=messagePagination(url.searchParams),where=status==='all'?'':' WHERE r.status=$1',values=status==='all'?[]:[status];
+        const count=await db().prepare('SELECT count(*)::integer AS total FROM community_reviews r'+where).bind(...values).first<{total:number}>();
+        const list=await db().prepare(reviewQuery+where+` ORDER BY r.created_at DESC,r.id LIMIT $${values.length+1} OFFSET $${values.length+2}`).bind(...values,limit,offset).all<Review>();
+        return json({items:list.results,total:count?.total??0,offset,limit,nextOffset:offset+limit<(count?.total??0)?offset+limit:null});
+      }
+      if(method==='GET'&&path.length===3) {
+        const review=await db().prepare(reviewQuery+' WHERE r.id=$1').bind(path[2]).first<Review>();if(!review)throw new ApiError(404,'review_not_found','审核记录不存在');return json(review);
+      }
+      if(method==='GET'&&path.length===4&&['skill','file','package','download'].includes(path[3])) {
+        const skill=await reviewSkill(path[2]);return path[3]==='skill'?json(skill):skillArtifact(skill,path[3]);
+      }
+      if(method==='POST'&&path.length===4&&path[3]==='decision') {
+        const writer=(await identity(request,true,true))!,input=await body(request);return json(await decideReview(path[2],writer.userId,input.decision,input.reason));
+      }
+      throw new ApiError(404,'route_not_found','管理员接口不存在');
+    }
     if (path[0] === 'messages') {
+      if(method==='DELETE'&&path.length===2) {
+        const user=(await identity(request,true,true))!;requireAdmin(user.role);
+        const result=await db().prepare('UPDATE messages SET deleted_at=now(),deleted_by=$1 WHERE id=$2 AND deleted_at IS NULL').bind(user.userId,path[1]).run();
+        if(!result.meta.changes)throw new ApiError(404,'message_not_found','留言不存在');return json({deleted:true});
+      }
       if (method === 'GET' && path.length === 1) {
         await identity(request);
         const { offset, limit } = messagePagination(url.searchParams);
         const [count, list] = await Promise.all([
-          db().prepare('SELECT count(*)::integer AS total FROM messages').first<{total:number}>(),
-          db().prepare(messageQuery+' ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2').bind(limit,offset).all<MessageRow>(),
+          db().prepare('SELECT count(*)::integer AS total FROM messages WHERE deleted_at IS NULL').first<{total:number}>(),
+          db().prepare(messageQuery+' WHERE deleted_at IS NULL ORDER BY created_at DESC,id DESC LIMIT $1 OFFSET $2').bind(limit,offset).all<MessageRow>(),
         ]);
         const total = count?.total ?? 0;
         return json({items:list.results.map(mapMessage),total,offset,limit,nextOffset:offset+limit<total?offset+limit:null});
       }
       if (method === 'GET' && path.length === 2) {
         await identity(request);
-        const message = await db().prepare(messageQuery+' WHERE id=$1').bind(path[1]).first<MessageRow>();
+        const message = await db().prepare(messageQuery+' WHERE id=$1 AND deleted_at IS NULL').bind(path[1]).first<MessageRow>();
         if (!message) throw new ApiError(404,'message_not_found','留言不存在');
         return json(mapMessage(message));
       }
@@ -186,11 +233,11 @@ export async function handle(request: Request) {
       }
     }
     if (method === 'GET' && path[0] === 'meta') {
-      const user = await identity(request); const list = await allSkills(user?.userId);
-      return json({ agents: AGENTS, categories: CATEGORIES, skillCount: list.length, sourceCount: new Set(list.filter(s => s.source).map(s => s.source)).size, favoriteCount: list.filter(s => s.favorite).length, workspace: authConfig().mode==='cas'?'cas':'local', loginConfigured:authConfig().mode==='cas', user: user ? { id:user.userId,displayName:user.displayName,email:user.email,scope:user.scope } : null });
+      const user=currentUser,list=await allSkills(user.userId),visible=await allSkills(user.userId,'all');
+      return json({ agents: AGENTS, categories: CATEGORIES, skillCount: list.length, sourceCount: new Set(list.filter(s => s.source).map(s => s.source)).size, favoriteCount: visible.filter(s => s.favorite).length, workspace: authConfig().mode==='cas'?'cas':'local', loginConfigured:authConfig().mode==='cas', user: user ? { id:user.userId,displayName:user.displayName,email:user.email,scope:user.scope,role:user.role } : null });
     }
     if (path[0] === 'skills' && !path[1] && method === 'GET') {
-      const user = await identity(request, url.searchParams.get('favorites') === 'true'); let list = await allSkills(user?.userId);
+      const user=currentUser;let list=await allSkills(user.userId,url.searchParams.get('scope')??(url.searchParams.get('favorites')==='true'?'all':'mine'));
       const agent = url.searchParams.get('agent'), category = url.searchParams.get('category'), q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
       if (agent) { validAgent(agent); list = list.filter(s => s.agents.includes(agent as Skill['agents'][number])); }
       if (category) { if (!CATEGORIES.includes(category as Skill['category'])) throw new ApiError(400, 'invalid_category', '无效分类'); list = list.filter(s => s.category === category); }
@@ -205,24 +252,29 @@ export async function handle(request: Request) {
     }
     if (path[0] === 'skills' && !path[1] && method === 'POST') { const user = await identity(request, true, true); const {input,archive}=await upload(request); return json(await publish(input, user!.userId,archive), 201); }
     if (path[0] === 'skills' && path[1]) {
-      const id = path[1], user = await identity(request);
-      if (method === 'GET' && path.length === 2) return json(await getSkill(id, user?.userId));
-      if (method === 'GET' && path[2] === 'versions') { await getSkill(id); const result = await db().prepare('SELECT version,digest,changelog,created_at,"commit" FROM versions WHERE skill_id=$1').bind(id).all<{version:string}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
+      const id=path[1],user=currentUser;
+      if(path.length===3&&path[2]==='reviews'&&method==='GET') {
+        const owned=await db().prepare('SELECT id FROM skills WHERE id=$1 AND owner=$2').bind(id,user.userId).first();if(!owned)throw new ApiError(404,'skill_not_found','技能不存在');
+        return json((await db().prepare(reviewQuery+' WHERE r.skill_id=$1 ORDER BY r.created_at DESC').bind(id).all<Review>()).results);
+      }
+      if(path.length===3&&path[2]==='community'&&['POST','DELETE'].includes(method)) {
+        const writer=(await identity(request,true,true))!;
+        if(method==='DELETE')return json(await withdrawCommunity(id,writer.userId));
+        const owned=await db().prepare('SELECT id FROM skills WHERE id=$1 AND owner=$2').bind(id,writer.userId).first();if(!owned)throw new ApiError(404,'skill_not_found','技能不存在');
+        const input=await body(request);if(input.version!==undefined&&typeof input.version!=='string')throw new ApiError(400,'invalid_version','version 必须是字符串');
+        if(writer.kind==='local')throw new ApiError(503,'cas_required','社区审核需要公司 CAS 身份');
+        const skill=await getSkill(id,writer.userId,input.version as string|undefined),reviewId=crypto.randomUUID();
+        try {await db().prepare("INSERT INTO community_reviews(id,skill_id,version,submitter) VALUES($1,$2,$3,$4)").bind(reviewId,id,skill.version,writer.userId).run();}
+        catch(error){if((error as {code?:string}).code==='23505')throw new ApiError(409,'review_exists','该版本已待审核或已通过');throw error;}
+        return json({id:reviewId,skillId:id,version:skill.version,status:'pending'},201);
+      }
+      if (method === 'GET' && path.length === 2) return json(await getSkill(id,user.userId,url.searchParams.get('version')??undefined));
+      if (method === 'GET' && path[2] === 'versions') { const skill=await getSkill(id,user.userId);const result=await db().prepare('SELECT v.version,v.digest,v.changelog,v.created_at,v."commit" FROM versions v JOIN skills s ON s.id=v.skill_id WHERE s.id=$1'+(skill.owner===user.userId?'':` AND ${approvedVersion}`)).bind(id).all<{version:string}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
       if (method==='GET' && path.length===3 && ['file','download','package'].includes(path[2])) {
-        const skill=await getSkill(id), version=url.searchParams.get('version')??skill.version, row=await snapshot(id,version);
-        if(path[2]==='file')return new Response(row.markdown,{headers:{'Content-Type':'text/markdown; charset=utf-8','ETag':'"'+row.digest+'"','X-Skill-Digest':row.digest,'X-Content-Type-Options':'nosniff','Cache-Control':'no-store'}});
-        const info=await packageInfo(id,version,row.markdown);
-        if(path[2]==='package')return json({...info,skillId:id,version});
-        let bytes:Uint8Array;
-        if(info.kind==='uploaded') {
-          const chunks=await db().prepare('SELECT content FROM package_chunks WHERE skill_id=$1 AND version=$2 ORDER BY chunk_index').bind(id,version).all<{content:number[]}>();
-          bytes=new Uint8Array(info.size);let at=0;for(const chunk of chunks.results){const content=new Uint8Array(chunk.content);bytes.set(content,at);at+=content.length;}
-          if(at!==info.size || await digest(bytes)!==info.digest)throw new ApiError(500,'package_corrupt','技能包存储校验失败');
-        }else bytes=markdownPackage(row.markdown);
-        return zipResponse(bytes,id+'-'+version+'.zip',info.digest);
+        return skillArtifact(await getSkill(id,user.userId,url.searchParams.get('version')??undefined),path[2]);
       }
       if (path[2] === 'favorite' && ['PUT','DELETE'].includes(method)) {
-        const writer = await identity(request, true, true); await getSkill(id);
+        const writer = await identity(request, true, true); await getSkill(id,writer!.userId);
         if (method === 'PUT') await db().prepare('INSERT INTO favorites (user_id,skill_id,created_at) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING').bind(writer!.userId,id,now()).run();
         else await db().prepare('DELETE FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(writer!.userId,id).run();
         return json({ skillId:id, favorite:method==='PUT' });

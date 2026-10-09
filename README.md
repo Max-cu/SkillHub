@@ -2,11 +2,11 @@
 
 Find what you need. Or just look around.
 
-极简 PC 技能库：搜索、收藏、标准 ZIP 发布、不可变版本、原包下载、API Key，以及带胶带便签的留言白板。React + GSAP；UI 与外部程序调用同一套 REST API。发布只接收 ZIP，永不支持 GitHub 导入、URL 或直接 Markdown 发布。
+极简 PC 技能库：私有 ZIP 上传、管理员审核社区发布、搜索、收藏、不可变版本、原包下载、API Key，以及支持管理员删除便签的留言白板。React + GSAP；UI 与外部程序调用同一套 REST API。发布只接收 ZIP，永不支持 GitHub 导入、URL 或直接 Markdown 发布。
 
 ## API 快速开始
 
-可读文档位于 `/docs`，按技能、留言、密钥和系统分组，展示参数与可复制的 PowerShell / cURL 示例。页面右上角仍可下载 OpenAPI JSON，供 Postman 等工具导入。
+可读文档位于 `/docs`，按技能、社区审核、留言、密钥、认证和系统分组，展示参数与可复制的 PowerShell / cURL 示例。页面右上角仍可下载 OpenAPI JSON，供 Postman 等工具导入。
 
 技能库、下载和留言均需公司 CAS 会话或个人 API Key。先在网页完成公司登录，在“开发者 API”创建只读 / 读写 Key；密钥只显示一次。接口前缀 `/api/v1`。以下示例使用 Bash/curl；Windows 请用 `curl.exe`，或使用下方 PowerShell 示例。`BASE` 替换为自己的 SkillHub 地址。
 
@@ -19,36 +19,37 @@ curl -fsS "$BASE/api/v1/health"
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/meta"
 curl -fsS "$BASE/api/v1/openapi.json" -o openapi.json
 
-# 搜索、分类、分页
+# 我的技能：搜索、分类、分页；社区请传 scope=community
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" --get "$BASE/api/v1/skills" \
-  --data-urlencode "q=react" --data-urlencode "category=development" \
+  --data-urlencode "scope=mine" --data-urlencode "q=react" --data-urlencode "category=development" \
   --data-urlencode "offset=0" --data-urlencode "limit=12"
 
-# 发布标准 ZIP
+# 上传标准 ZIP 到私有库；不会直接进入社区
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills" \
   -F "file=@my-skill.zip" -F "version=1.0.0" \
   -F "category=development" -F "license=MIT" \
   -F 'agents=["codex","claude-code"]' -F 'tags=["example"]'
 
-# 用发布响应的 data.id 替换 my-skill
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/my-skill"
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/my-skill/versions"
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/my-skill/package?version=1.0.0"
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/my-skill/file?version=1.0.0" -o SKILL.md
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/my-skill/download?version=1.0.0" -o my-skill-1.0.0.zip
+# 用上传响应 data.id 设置 SKILL_ID（新技能为 sk-UUID，名称可以跨用户重复）
+export SKILL_ID="sk-REPLACE_WITH_RETURNED_ID"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/$SKILL_ID"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/$SKILL_ID/versions"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/$SKILL_ID/package?version=1.0.0"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/$SKILL_ID/file?version=1.0.0" -o SKILL.md
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills/$SKILL_ID/download?version=1.0.0" -o my-skill-1.0.0.zip
 
 # 收藏与取消收藏，幂等
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X PUT "$BASE/api/v1/skills/my-skill/favorite"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X PUT "$BASE/api/v1/skills/$SKILL_ID/favorite"
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills?favorites=true"
-curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X DELETE "$BASE/api/v1/skills/my-skill/favorite"
+curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X DELETE "$BASE/api/v1/skills/$SKILL_ID/favorite"
 
 # 发布更高版本，不覆盖已发布版本
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills" \
-  -F "file=@my-skill-new.zip" -F "id=my-skill" \
+  -F "file=@my-skill-new.zip" -F "id=$SKILL_ID" \
   -F "version=1.1.0" -F "changelog=Add reference files"
 ```
 
-版本使用数字 `x.y.z` 比较，`1.10.0` 高于 `1.9.0`。同一 ID 必须属于当前 CAS 账号。原始 ZIP、脚本和资源逐字节保存，计算 SHA-256，历史版本可下载。
+版本使用数字 `x.y.z` 比较，`1.10.0` 高于 `1.9.0`。同一 ID 必须属于当前 CAS 账号；两个人可上传同名技能，各自拥有不同 ID，不会冲突。版本详情和资源由服务端逐接口鉴权，不能通过伪造 owner / user_id / role 绕过。原始 ZIP、脚本和资源逐字节保存，计算 SHA-256，历史版本可下载。
 
 ### 响应与错误
 
@@ -95,16 +96,70 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | GET / POST | `/keys` | 查看 Key 元数据 / 创建 Key |
 | DELETE | `/keys/{id}` | 撤销 Key |
 | GET / POST | `/messages` | 留言列表 / 发布便签 |
-| GET | `/messages/{id}` | 全文、署名和白板位置 |
+| GET / DELETE | `/messages/{id}` | 全文 / 管理员删除便签 |
+| POST / DELETE | `/skills/{id}/community` | 所有者提交审核 / 撤回社区 |
+| GET | `/skills/{id}/reviews` | 所有者审核记录 |
+| GET | `/admin/reviews` | 管理员审核列表 |
+| GET | `/admin/reviews/{id}` | 审核记录 |
+| GET | `/admin/reviews/{id}/skill` | 提交版本详情 |
+| GET | `/admin/reviews/{id}/file` | 提交版本原文 |
+| GET | `/admin/reviews/{id}/package` | 提交版本包内容 |
+| GET | `/admin/reviews/{id}/download` | 提交版本 ZIP |
+| POST | `/admin/reviews/{id}/decision` | 管理员通过 / 驳回 |
 
-`GET /skills` 支持 `q`、`category`、`favorites=true`、`offset`（默认 0）、`limit`（默认 24，1–100）、`agent`、`sort`。category 为 `development / design / productivity / testing / documentation`；agent 为 `claude-code / codex / cursor / gemini-cli`；sort 为 `featured / newest / name / compact`。Agent / 排序仅为 API 参数，不显示 UI 筛选。`version` 不传时读取最新版。
+`GET /skills` 支持 `scope=mine / community / all`（默认 mine，收藏查询默认 all）、`q`、`category`、`favorites=true`、`offset`（默认 0）、`limit`（默认 24，1–100）、`agent`、`sort`。category 为 `development / design / productivity / testing / documentation`；agent 为 `claude-code / codex / cursor / gemini-cli`；sort 为 `featured / newest / name / compact`。Agent / 排序仅为 API 参数，不显示 UI 筛选。`version` 不传时，所有者读取私有最新版；其他用户读取最新通过的社区版本。其他用户的版本列表和指定版本下载只开放已通过的版本，未审核版本返回 404。
+
+### 私有库、社区与管理员
+
+网页默认显示“我的技能”。上传 ZIP 后只有所有者可列表、查看、下载或更新；管理员也不能读取未提交的私有技能。社区列表为 `GET /skills?scope=community`，只显示通过审核的版本。内置公开上游示例为已有社区内容；升级前个人上传的技能保留所有者，默认转为私有，历史工作区技能仍不会自动认领。
+
+提交时冻结具体版本的 SKILL.md、ZIP 和展示元数据，管理员只能通过 `/admin/reviews/{id}/...` 读取这一版本。新版本或描述变更不会替换已通过版本，必须重新提交。驳回说明只向所有者和管理员展示，可重新提交同一不可变版本。所有者可以撤回全部待审核和已通过版本；已撤回内容从社区、其他用户收藏及下载接口消失，私有数据仍保留。
+
+```bash
+# 所有者提交某个版本；省略 version 默认私有最新版
+curl -fsS "$BASE/api/v1/skills/$SKILL_ID/community" \
+  -H "Authorization: Bearer $SKILLHUB_API_KEY" -H 'Content-Type: application/json' \
+  --data '{"version":"1.0.0"}'
+# 查看自己的审核历史
+curl -fsS "$BASE/api/v1/skills/$SKILL_ID/reviews" -H "Authorization: Bearer $SKILLHUB_API_KEY"
+# 撤回社区发布及待审核请求（私有库保留）
+curl -fsS -X DELETE "$BASE/api/v1/skills/$SKILL_ID/community" -H "Authorization: Bearer $SKILLHUB_API_KEY"
+
+# 以下 Key 必须属于管理员；写操作需要 write，普通用户 Key 返回 403
+export SKILLHUB_ADMIN_KEY="sg_REPLACE_WITH_ADMIN_PERSONAL_KEY"
+curl -fsS "$BASE/api/v1/admin/reviews?status=pending&limit=20" -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY"
+curl -fsS "$BASE/api/v1/admin/reviews/REVIEW_ID/download" -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY" -o submitted.zip
+curl -fsS "$BASE/api/v1/admin/reviews/REVIEW_ID/decision" \
+  -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY" -H 'Content-Type: application/json' \
+  --data '{"decision":"approve","reason":"审核通过"}'
+# 驳回：decision=reject；reason 最多 1000 字符。重复/已撤回审核返回 409。
+curl -fsS -X DELETE "$BASE/api/v1/messages/MESSAGE_ID" -H "Authorization: Bearer $SKILLHUB_ADMIN_KEY"
+```
+
+管理员删除便签后，列表和全文均不可访问（404）；独立 SkillHub PG 保留 `deleted_at / deleted_by` 审计信息，不影响其他便签。
+
+**手动指定管理员**：用户先完成一次公司登录，然后在现有服务器执行。不会自动把首个用户、任何 CAS 属性或指定名称升为管理员，没有升权 API。
+
+```bash
+cd /opt/skillhub
+# EXACT_CAS_ACCOUNT 必须是 CAS 返回的精确 cas_subject，不是显示姓名
+# 在专用 SkillHub PG 查找账号（不连接 SkillGo）：
+docker compose exec -T skillhub-postgres psql -U skillhub_admin -d skillhub -c "SELECT cas_subject,display_name,role FROM auth_users ORDER BY created_at;"
+docker compose exec -T skillhub node scripts/set-role.mjs --subject EXACT_CAS_ACCOUNT --role admin
+# 取消管理员：
+docker compose exec -T skillhub node scripts/set-role.mjs --subject EXACT_CAS_ACCOUNT --role user
+```
+
+角色修改在下一次 API 请求立即生效，已有 Cookie 和 Key 不会保留旧管理员权限。刷新网页可显示或隐藏“管理”入口。默认所有现有及新账号都是 user，本次上线不会替你指定任何管理员。
+
+历史版本原先没有独立展示元数据，本次迁移按迁移时的技能信息回填；原 SKILL.md 和 ZIP 字节保持不变。此后的版本会各自保存不可变元数据，审核与社区展示使用该版本的快照。
 
 ### ZIP 上传字段与格式
 
 | 字段 | 规则 / 默认值 |
 | --- | --- |
 | `file` | 必填，一个标准 `.zip` |
-| `id` | 默认为 frontmatter.name；更新时指定已有 ID |
+| `id` | 创建时为当前用户的 slug，默认为 frontmatter.name；更新可用自己的 data.id 或 data.slug；返回 data.id 才是详情 API 的 ID |
 | `version` | `x.y.z`，默认 `0.1.0` |
 | `category` | 上述五种分类，默认 `development` |
 | `license` | 发布者声明，默认 `Unspecified` |
@@ -153,7 +208,7 @@ curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/messages/ME
 
 ### 公司 CAS 与个人身份
 
-正式服务使用公司 CAS，整个技能库、留言板、详情、版本、原文、ZIP、收藏和 Key API 都需要登录会话或个人 Key。`/health`、`/openapi.json`、`/docs` 与认证入口公开，不包含业务数据。登录后，已发布技能和留言对公司用户共享；收藏和 Key 只属于当前账号；技能新版本仅原发布者可提交。
+正式服务使用公司 CAS，整个技能库、留言板、详情、版本、原文、ZIP、收藏和 Key API 都需要登录会话或个人 Key。`/health`、`/openapi.json`、`/docs` 与认证入口公开，不包含业务数据。技能上传后私有，审核通过的具体版本才对登录公司用户开放；留言对登录用户共享，仅管理员可删除。收藏和 Key 只属于当前账号；技能新版本仅所有者可提交，新版本需要单独审核。所有账号默认普通用户，管理员手动指定。
 
 浏览器启动顺序：处理 ticket → 清理地址栏 ticket → POST 交换 → GET 当前身份 → 加载业务。失败显示错误，由用户重新登录，不自动循环。票据由服务端校验；只接受 CAS 命名空间下的成功用户节点，拒绝重放、HTML 网关页、DTD/ENTITY 和错误 service。校验请求保持 TLS，禁止跟随重定向，超时 10 秒，响应最大 64 KiB。
 
@@ -302,9 +357,11 @@ node tests/api-integration.mjs
 node tests/board-integration.mjs
 ```
 
-CAS 模拟回归使用 `tests/compose.cas-qa.yaml` 和 `tests/cas-integration.mjs`，独立测试 PG / 网络 / 密码及模拟 CAS，不接入正式 CAS 或正式库。覆盖票据成功、无效 / 重放、service 绕过、同源、过期 / 退出及两个模拟账号的收藏、Key、发布权限；共享技能及白板读取按产品设计允许。真实公司登录和两个真实账号测试需分别验收，不把模拟结果当作真实验收。
+CAS 模拟回归使用 `tests/compose.cas-qa.yaml` 和 `tests/cas-integration.mjs`，独立测试 PG / 网络 / 密码及模拟 CAS，不接入正式 CAS 或正式库。覆盖票据成功、无效 / 重放、service 绕过、同源、过期 / 退出及两个模拟账号的收藏、Key、发布权限；共享技能及白板读取按产品设计允许。真实公司登录和两个真实账号测试需分别验收，不把模拟结果当作真实验收。新权限回归使用 `tests/community-integration.mjs`，测试角色分配、三账号私有下载防越权、版本与元数据审核冻结、重复审核、撤回、便签删除和角色撤销。
 
 2026-10-09 的 CAS 版本 `0.4.0` 已部署到现有服务器。类型检查、24 项单元测试与 136 项隔离模拟检查通过；应用重启后 PG 中的会话继续有效。正式环境验证未登录业务 API 返回 401，原业务表数据校验一致，两个产品的数据库容器均未重建或重启。用户已用一个真实公司账号确认登录、退出、重新登录、技能详情与留言板正常；两个真实账号的交叉权限验收尚未进行，双账号结果目前来自隔离模拟测试。
+
+同日 `0.5.0` 已更新到现有服务器：24 项单元测试、136 项登录回归、128 项三账号权限模拟、旧数据迁移检查和会话重启检查通过。正式环境验证未登录的新管理与社区 API 返回 401，原有业务数据校验一致，SkillHub / SkillGo 数据库容器均未改变。未在正式库创建测试技能、便签或审核记录，未指定任何管理员。管理和私有库的三账号结果来自隔离模拟；真实管理员 UI 需要使用者手动指定角色后验证。
 
 旧工作区服务器回归使用 `tests/compose.pg-qa.yaml`：独立 `skillhub-pg-qa` 项目、私有测试网络、测试 PG 卷和单独测试密码，无宿主机端口。不要对正式库执行会写数据的测试。单元测试覆盖 ZIP 完整性、大小、路径、版本、便签以及防误连配置；API 测试覆盖 PG 中的原包下载、并发版本、收藏、Key 权限和留言持久化。
 

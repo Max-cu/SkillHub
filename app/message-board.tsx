@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from 'react';
-import { ArrowLeft, ArrowRight, Check, Loader2, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Loader2, Plus,Trash2 } from 'lucide-react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 import { api } from '@/lib/client-api';
@@ -14,12 +14,13 @@ const dateLabel = (value: string) => new Date(value).toLocaleString('zh-CN', { m
 const NOTE_WIDTH = 224, NOTE_HEIGHT = 238;
 const clamp = (value: number) => Math.max(0, Math.min(1, value));
 
-export default function MessageBoard({ notify }: { notify: (message: string) => void }) {
+export default function MessageBoard({ notify,isAdmin=false }: { notify: (message: string) => void;isAdmin?:boolean }) {
   const root = useRef<HTMLElement>(null);
   const [page, setPage] = useState<MessagePage | null>(null), [offset, setOffset] = useState(0), [refresh, setRefresh] = useState(0);
   const [loading, setLoading] = useState(true), [error, setError] = useState(''), [composing, setComposing] = useState(false), [selected, setSelected] = useState<BoardMessage | null>(null);
   const [position, setPosition] = useState<NotePosition>({x:.5,y:.5});
   const [columns, setColumns] = useState(4);
+  const [confirmDelete,setConfirmDelete]=useState(false),[deleting,setDeleting]=useState(false);
   const board = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!board.current) return;
@@ -39,8 +40,9 @@ export default function MessageBoard({ notify }: { notify: (message: string) => 
     return () => mm.revert();
   }, { scope: root, dependencies: [loading, page], revertOnUpdate: true });
   const inspect = async (id: string) => {
-    try { setSelected(await api<BoardMessage>('messages/' + id)); } catch (e) { notify((e as Error).message); }
+    try { setConfirmDelete(false);setSelected(await api<BoardMessage>('messages/' + id)); } catch (e) { notify((e as Error).message); }
   };
+  const remove=async()=>{if(!selected||deleting)return;setDeleting(true);try{await api('messages/'+selected.id,{method:'DELETE'});setSelected(null);setConfirmDelete(false);setOffset(0);setRefresh(v=>v+1);notify('便签已删除');}catch(e){notify((e as Error).message);}finally{setDeleting(false);}};
   const composeAt = (e: MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('.note-placement') || loading || error) return;
     const rect=e.currentTarget.getBoundingClientRect();
@@ -57,7 +59,7 @@ export default function MessageBoard({ notify }: { notify: (message: string) => 
       </div>
       {!!page&&page.total>12&&<div className="board-pagination"><span>第 {Math.floor(offset/12)+1} 页</span><div>{offset>0&&<button className="text-btn" onClick={()=>setOffset(Math.max(0,offset-12))}><ArrowLeft size={14}/>上一页</button>}{page.nextOffset!==null&&<button className="text-btn" onClick={()=>setOffset(page.nextOffset!)}>下一页<ArrowRight size={14}/></button>}</div></div>}
     {composing && <NoteComposer position={position} onClose={() => setComposing(false)} onPosted={() => { setComposing(false); setOffset(0); setRefresh(v => v + 1); notify('便利贴已贴上白板'); }} />}
-    {selected && <Modal title="留言" onClose={() => setSelected(null)}><div className="note-view"><div className={`note-full note-${selected.color}`}><p>{selected.content}</p><div className="note-signature"><strong>{selected.author}</strong><time dateTime={selected.createdAt}>{dateLabel(selected.createdAt)}</time></div></div></div></Modal>}
+    {selected && <Modal title="留言" onClose={() => setSelected(null)} dismissible={!deleting}><div className="note-view"><div className={`note-full note-${selected.color}`}><p>{selected.content}</p><div className="note-signature"><strong>{selected.author}</strong><time dateTime={selected.createdAt}>{dateLabel(selected.createdAt)}</time></div></div></div>{isAdmin&&<div className="modal-footer">{confirmDelete?<><span>确认删除这张便签？</span><button className="secondary-btn" disabled={deleting} onClick={()=>setConfirmDelete(false)}>取消</button><button className="primary-btn" disabled={deleting} onClick={remove}>{deleting?<Loader2 size={14} className="spin"/>:<Trash2 size={14}/>}确认删除</button></>:<button className="text-btn" onClick={()=>setConfirmDelete(true)}><Trash2 size={14}/>删除便签</button>}</div>}</Modal>}
   </section>;
 }
 

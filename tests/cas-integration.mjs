@@ -58,11 +58,11 @@ try {
   const replies=await Promise.all([exchange(new Map(parallel),'ST-Alice-'+randomUUID()),exchange(new Map(parallel),'ST-Alice-'+randomUUID())]);check(replies.map(r=>r.status).sort(),[200,401]);
   const expiredAttempt=jar();await loginAttempt(expiredAttempt);await pool.query('UPDATE auth_attempts SET expires_at=now()-interval \'1 second\'');check((await exchange(expiredAttempt,'ST-Alice-'+randomUUID())).status,401);
   const id='cas-test-'+randomUUID().slice(0,8),bundle=upload(id);
-  check((await request('skills',{cookies:alice.cookies,method:'POST',body:bundle.form})).status,201);
-  check((await request('skills/'+id+'/download',{cookies:bob.cookies})).status,200); // published registry is intentionally shared after authentication
-  const bUpdate=upload(id,'1.1.0');check((await request('skills',{cookies:bob.cookies,method:'POST',body:bUpdate.form})).status,403);
-  const downloaded=await request('skills/'+id+'/download',{cookies:alice.cookies});check(Buffer.from(await downloaded.response.arrayBuffer()),Buffer.from(bundle.bytes));
-  check((await request('skills/'+id+'/favorite',{cookies:alice.cookies,method:'PUT'})).status,200);
+  const published=await request('skills',{cookies:alice.cookies,method:'POST',body:bundle.form});check(published.status,201);const skillId=published.data.data.id;
+  check((await request('skills/'+skillId+'/download',{cookies:bob.cookies})).status,404); // uploads are private until approved
+  const bUpdate=upload(id,'1.1.0');bUpdate.form.append('id',skillId);check((await request('skills',{cookies:bob.cookies,method:'POST',body:bUpdate.form})).status,404);
+  const downloaded=await request('skills/'+skillId+'/download',{cookies:alice.cookies});check(Buffer.from(await downloaded.response.arrayBuffer()),Buffer.from(bundle.bytes));
+  check((await request('skills/'+skillId+'/favorite',{cookies:alice.cookies,method:'PUT'})).status,200);
   check((await request('skills?favorites=true',{cookies:alice.cookies})).data.data.total,1);check((await request('skills?favorites=true&user_id='+encodeURIComponent(alice.user.id),{cookies:bob.cookies})).data.data.total,0);
   const aKey=await request('keys',{cookies:alice.cookies,method:'POST',body:{name:'alice-read',scope:'read'}});check(aKey.status,201);
   check((await request('keys',{cookies:bob.cookies})).data.data.length,0);check((await request('keys/'+aKey.data.data.id,{cookies:bob.cookies,method:'DELETE'})).status,404);
@@ -81,7 +81,7 @@ try {
   const aliceAgain=await login('Alice');check(aliceAgain.user.id,alice.user.id);check((await request('skills?favorites=true',{cookies:aliceAgain.cookies})).data.data.total,1);
   check((await request('keys/'+aKey.data.data.id,{cookies:aliceAgain.cookies,method:'DELETE'})).status,200);check((await request('skills',{headers:bearer})).status,401);
   await pool.query('UPDATE auth_sessions SET expires_at=now()-interval \'1 second\' WHERE user_id=$1',[bob.user.id]);check((await request('skills',{cookies:bob.cookies})).status,401);check((await request('keys',{cookies:bob.cookies})).status,401);
-  await pool.query("INSERT INTO skills(id,name,description,category,agents,tags,source,source_path,license,owner,featured,created_at) VALUES('legacy-hidden','legacy-hidden','Historical unclaimed','development','[]','[]','','SKILL.md','MIT','local-workspace',0,'2026-10-09')");
+  await pool.query("INSERT INTO skills(id,slug,name,description,category,agents,tags,source,source_path,license,owner,featured,created_at) VALUES('legacy-hidden','legacy-hidden','legacy-hidden','Historical unclaimed','development','[]','[]','','SKILL.md','MIT','local-workspace',0,'2026-10-09')");
   await pool.query("INSERT INTO versions(skill_id,version,markdown,digest,changelog,created_at) VALUES('legacy-hidden','1.0.0','historical','sha256:x','','2026-10-09')");
   check((await request('skills/legacy-hidden',{cookies:aliceAgain.cookies})).status,404);
   check((await request('skills?q=legacy-hidden',{cookies:aliceAgain.cookies})).data.data.total,0);

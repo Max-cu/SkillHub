@@ -4,7 +4,7 @@ import { ApiError } from './domain';
 import { readAuthConfig } from './cas-config.mjs';
 import { validateCasTicket, validateTicketInput } from './cas-protocol';
 
-export type SessionUser={userId:string;displayName:string;scope:'write';kind:'session'};
+export type SessionUser={userId:string;displayName:string;role:'user'|'admin';scope:'write';kind:'session'};
 const hash=(token:string)=>createHash('sha256').update(token).digest('hex');
 export function authConfig() {try{return readAuthConfig();}catch{throw new ApiError(503,'auth_unavailable','SkillHub 登录配置暂不可用');}}
 const names=(secure:boolean)=>({session:secure?'__Host-skillhub_session':'skillhub_cas_session',attempt:secure?'__Host-skillhub_login':'skillhub_cas_login'});
@@ -26,16 +26,16 @@ export function checkBrowserMutation(request:Request,canonicalOrigin?:string,req
 export async function sessionIdentity(request:Request):Promise<SessionUser|null> {
   const config=authConfig();if(config.mode!=='cas')return null;
   const token=cookie(request,names(config.secure).session);if(!token)return null;
-  const row=await getDb().prepare('SELECT u.id,u.display_name FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()').bind(hash(token)).first<{id:string;display_name:string}>();
-  return row?{userId:row.id,displayName:row.display_name,scope:'write',kind:'session'}:null;
+  const row=await getDb().prepare('SELECT u.id,u.display_name,u.role FROM auth_sessions s JOIN auth_users u ON u.id=s.user_id WHERE s.token_hash=$1 AND s.expires_at>now()').bind(hash(token)).first<{id:string;display_name:string;role:'user'|'admin'}>();
+  return row?{userId:row.id,displayName:row.display_name,role:row.role,scope:'write',kind:'session'}:null;
 }
 export async function handleAuth(request:Request,path:string[],parseBody:(r:Request)=>Promise<Record<string,unknown>>):Promise<Response|null> {
   if(path[0]!=='auth')return null;
   const config=authConfig(),route=path.slice(1).join('/'),method=request.method;
   if(route==='me'&&method==='GET') {
-    if(config.mode==='local')return response({authenticated:true,loginConfigured:false,user:{id:'local-workspace',displayName:'本地工作区'},service:null});
+    if(config.mode==='local')return response({authenticated:true,loginConfigured:false,user:{id:'local-workspace',displayName:'本地工作区',role:'user'},service:null});
     const user=await sessionIdentity(request);
-    return response({authenticated:!!user,loginConfigured:true,user:user?{id:user.userId,displayName:user.displayName}:null,service:config.service});
+    return response({authenticated:!!user,loginConfigured:true,user:user?{id:user.userId,displayName:user.displayName,role:user.role}:null,service:config.service});
   }
   if(config.mode!=='cas')throw new ApiError(404,'auth_disabled','本地测试模式未启用 CAS');
   // Reverse-proxy headers cannot widen the registered service.
