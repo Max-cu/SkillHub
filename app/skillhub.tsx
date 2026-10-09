@@ -1,0 +1,147 @@
+'use client';
+
+import { useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react';
+import gsap from 'gsap';
+import { useGSAP } from '@gsap/react';
+import { ArrowDownToLine, ArrowRight, ArrowUpRight, BookOpen, Bookmark, Check, CircleHelp, Code2, Command, Copy, FileCode2, GitBranch, Layers3, LayoutDashboard, Loader2, LockKeyhole, Plus, Terminal, Trash2, X, Zap, FlaskConical, Palette, Search } from 'lucide-react';
+import Modal from './modal';
+import MessageBoard from './message-board';
+import { api } from '@/lib/client-api';
+import { AGENTS, CATEGORIES, type Agent, type Category, type Skill, type PackageMetadata } from '@/lib/types';
+
+gsap.registerPlugin(useGSAP);
+type View = 'discover' | 'favorites' | 'board' | 'api' | 'research';
+type Summary = Omit<Skill, 'markdown'>;
+type Meta = { workspace?:'local'|'shared'|null;skillCount:number;sourceCount:number;favoriteCount:number;user:{id:string;email?:string;scope:string}|null };
+const categoryLabels: Record<Category,string> = { development:'开发工程', design:'设计创意', productivity:'效率工具', testing:'测试与调试', documentation:'文档写作' };
+const categoryIcons = { development:Code2, design:Palette, productivity:Zap, testing:FlaskConical, documentation:BookOpen };
+const agentLabels: Record<Agent,string> = { 'claude-code':'Claude Code',codex:'Codex',cursor:'Cursor','gemini-cli':'Gemini CLI' };
+
+function SupportLogo() { return <span className="support-logo"><img src="/skillgo-logo.png" alt="" width="1280" height="1280" /></span>; }
+function SkillIcon({skill}:{skill:Summary}) { const Icon = categoryIcons[skill.category]; return <span className={`skill-icon ${skill.category}`}><Icon size={23} strokeWidth={1.7}/></span>; }
+function Markdown({text}:{text:string}) {
+  const lines=text.split('\n');const blocks:ReactNode[]=[];let code:string[]|null=null;
+  lines.forEach((line,i)=>{
+    if(line.startsWith('```')){if(code){blocks.push(<pre key={i} className="markdown-code"><code>{code.join('\n')}</code></pre>);code=null;}else code=[];return;}
+    if(code){code.push(line);return;}
+    const heading=line.match(/^(#{1,4})\s+(.+)/);if(heading){blocks.push(heading[1].length===1?<h3 key={i}>{heading[2]}</h3>:<h4 key={i}>{heading[2]}</h4>);return;}
+    if(line.trim())blocks.push(<p key={i} className={/^[-*]\s|^\d+\./.test(line)?'markdown-list':''}>{line}</p>);
+  });if(code)blocks.push(<pre className="markdown-code" key="end">{(code as string[]).join('\n')}</pre>);return <div className="markdown-body">{blocks}</div>;
+}
+
+export default function SkillHub() {
+  const root=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null);
+  const [view,setView]=useState<View>('discover'),[category,setCategory]=useState(''),[query,setQuery]=useState(''),[debounced,setDebounced]=useState('');
+  const [meta,setMeta]=useState<Meta|null>(null),[skills,setSkills]=useState<Summary[]>([]),[total,setTotal]=useState(0),[loading,setLoading]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[moreLoading,setMoreLoading]=useState(false);
+  const [selected,setSelected]=useState<Skill|null>(null),[modal,setModal]=useState<'publish'|'login'|null>(null),[toast,setToast]=useState('');
+  const notify=(message:string)=>setToast(message), reload=()=>setRefresh(v=>v+1);
+  useEffect(()=>{const t=setTimeout(()=>setDebounced(query),250);return()=>clearTimeout(t);},[query]);
+  useEffect(()=>{if(!toast)return;const t=setTimeout(()=>setToast(''),3500);return()=>clearTimeout(t);},[toast]);
+  useEffect(()=>{const listener=(e:KeyboardEvent)=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();searchRef.current?.focus();}};window.addEventListener('keydown',listener);return()=>window.removeEventListener('keydown',listener);},[]);
+  useEffect(()=>{let current=true;api<Meta>('meta').then(v=>{if(current)setMeta(v);}).catch(e=>{if(current)setError(e.message);});return()=>{current=false;};},[refresh]);
+  const params=()=>new URLSearchParams({q:debounced,...(category?{category}:{}),...(view==='favorites'?{favorites:'true'}:{})});
+  useEffect(()=>{
+    if(!['discover','favorites'].includes(view))return;
+    if(view==='favorites'&&meta&&!meta.user){setSkills([]);setTotal(0);setLoading(false);return;}
+    let current=true;setLoading(true);setError('');
+    api<{items:Summary[];total:number}>('skills?'+params()).then(v=>{if(current){setSkills(v.items);setTotal(v.total);}}).catch(e=>{if(current)setError(e.message);}).finally(()=>{if(current)setLoading(false);});return()=>{current=false;};
+  // The query is rebuilt from exactly these values.
+  },[debounced,category,view,refresh,meta?.user?.id]);
+  useGSAP(()=>{
+    const mm=gsap.matchMedia();
+    mm.add('(prefers-reduced-motion: no-preference)',()=>{
+      const targets=root.current?.querySelectorAll('.site-header, .hero-copy');
+      if(targets?.length) gsap.from(targets,{y:8,autoAlpha:0,duration:.45,stagger:.08,ease:'power2.out',clearProps:'transform,opacity,visibility'});
+    });
+    return()=>mm.revert();
+  },{scope:root});
+  useGSAP(()=>{if(loading||!skills.length||(view!=='discover'&&view!=='favorites'))return;const cards=root.current?.querySelectorAll('.skill-card');if(!cards?.length)return;const mm=gsap.matchMedia();mm.add('(prefers-reduced-motion: no-preference)',()=>gsap.from(cards,{y:8,autoAlpha:0,stagger:.035,duration:.3,ease:'power2.out',clearProps:'transform,opacity,visibility'}));return()=>mm.revert();},{scope:root,dependencies:[loading,skills,view],revertOnUpdate:true});
+  const navigate=(next:View)=>{window.scrollTo({top:0,behavior:'instant'});setView(next);setCategory('');setQuery('');};
+  const signedIn=()=>{if(meta?.user)return true;notify('工作区暂时不可用，请稍后重试');return false;};
+  const favorite=async(skill:Summary)=>{if(!signedIn())return;try{await api('skills/'+skill.id+'/favorite',{method:skill.favorite?'DELETE':'PUT'});notify(skill.favorite?'已移出收藏':'已加入收藏');if(selected?.id===skill.id)setSelected({...selected,favorite:!skill.favorite});reload();}catch(e){notify((e as Error).message);}};
+  const inspect=async(skill:Summary)=>{try{setSelected(await api<Skill>('skills/'+skill.id));}catch(e){notify((e as Error).message);}};
+  const copy=async(text:string)=>{try{await navigator.clipboard.writeText(text);notify('已复制到剪贴板');}catch{notify('无法访问剪贴板，请手动复制');}};
+  const loadMore=async()=>{setMoreLoading(true);try{const p=params();p.set('offset',String(skills.length));const r=await api<{items:Summary[]}>('skills?'+p);setSkills(prev=>[...prev,...r.items]);}catch(e){notify((e as Error).message);}finally{setMoreLoading(false);}};
+
+  return <div className="app-shell" ref={root}>
+    <header className="site-header">
+      <div className="header-inner">
+        <button className="brand" onClick={()=>navigate('discover')} aria-label="SkillHub 首页"><img className="company-logo" src="/tianchen-logo.png" alt="中国化学 · 天辰公司 CNCEC TIANCHEN" width="1074" height="359" /></button>
+        <nav className="main-nav" aria-label="主导航">
+          <button className={view==='discover'?'active':''} onClick={()=>navigate('discover')}>发现</button>
+          <button className={view==='favorites'?'active':''} onClick={()=>navigate('favorites')}>收藏</button>
+          <button className={view==='board'?'active':''} onClick={()=>navigate('board')}>留言板</button>
+          <button className={view==='api'?'active':''} onClick={()=>navigate('api')}>开发者 API</button>
+        </nav>
+        <div className="header-actions">
+          <button className="text-btn" onClick={()=>{if(signedIn())setModal('publish');}}>发布技能 <Plus size={15}/></button>
+          <button className="login-link" onClick={()=>setModal('login')}>登录 <ArrowRight size={14}/></button>
+        </div>
+      </div>
+    </header>
+    <div className="main-shell"><main className="main-content">
+      {['discover','favorites'].includes(view)?<>
+        <section className="hero"><div className="hero-copy"><h1>{view==='discover'?<>Find what you need.<br/><span>Or just look around.</span></>:'Your favorites. All in one place.'}</h1></div></section>
+
+        <section className="catalog-section">
+          <div className="section-heading"><h2>{view==='favorites'?'我的收藏':'技能库'} <span>{total}</span></h2></div>
+          <div className="catalog-controls"><div className="search-box"><Search size={18}/><input ref={searchRef} value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索技能、标签或任务" aria-label="搜索技能"/>{query?<button className="icon-btn" onClick={()=>setQuery('')} aria-label="清空搜索"><X size={14}/></button>:<kbd><Command size={11}/> K</kbd>}</div></div>
+
+          <div className="category-tabs" aria-label="分类筛选"><button className={!category?'active':''} onClick={()=>setCategory('')}>全部技能</button>{CATEGORIES.map(c=><button key={c} className={category===c?'active':''} onClick={()=>setCategory(c)}>{categoryLabels[c]}</button>)}</div>
+          {error?<div className="empty-state"><CircleHelp size={28}/><h3>暂时无法加载</h3><p>{error}</p><button className="secondary-btn" onClick={reload}>重试</button></div>:loading?<div className="skill-grid">{[0,1,2,3,4,5].map(i=><div className="skeleton-card" key={i}><div/><span/><span/><span/></div>)}</div>:skills.length?<><div className="skill-grid">{skills.map(skill=><article className="skill-card" key={skill.id}><div className="card-top"><SkillIcon skill={skill}/><div className="card-badges"><button className={`icon-btn bookmark-btn ${skill.favorite?'saved':''}`} onClick={()=>favorite(skill)} aria-label={skill.favorite?'取消收藏 '+skill.name:'收藏 '+skill.name}><Bookmark size={17} fill={skill.favorite?'currentColor':'none'}/></button></div></div><button className="card-content" onClick={()=>inspect(skill)}><h3>{skill.name}<ArrowUpRight size={15}/></h3><span className="card-author">{skill.source?skill.source.replace('https://github.com/','').split('/')[0]:'本地发布'}<span className="author-dot">·</span>v{skill.version}</span><p>{skill.description}</p></button><div className="card-tags">{skill.tags.slice(0,3).map(t=><button key={t} onClick={()=>setQuery(t)}>{t}</button>)}</div><div className="card-footer"><span className="card-compatibility">{categoryLabels[skill.category]}</span><a className="card-download" href={`/api/v1/skills/${skill.id}/download`} aria-label={'下载 '+skill.name+' ZIP'}><ArrowDownToLine size={14}/>下载</a></div></article>)}</div>{skills.length<total&&<button className="secondary-btn load-more" disabled={moreLoading} onClick={loadMore}>{moreLoading?<Loader2 className="spin" size={15}/>:<Plus size={15}/>}加载更多</button>}</>:<div className="empty-state"><Search size={30}/><h3>{view==='favorites'&&!meta?.user?'登录，建立你的技能收藏':'还没有找到匹配的技能'}</h3><p>{view==='favorites'&&!meta?.user?'收藏会保存在你的工作空间中。':'换个关键词，或调整分类。'}</p>{view==='favorites'&&!meta?.user?<button className="primary-btn" onClick={()=>setModal('login')}>登录</button>:<button className="secondary-btn" onClick={()=>{setQuery('');setCategory('');}}>清空筛选</button>}</div>}
+        </section>
+      </>:view==='board'?<MessageBoard notify={notify}/>:view==='api'?<ApiView meta={meta} notify={notify} copy={copy}/>:<ResearchView/>}
+      <footer className="page-footer" aria-label="技术支持"><button className="support-credit" onClick={()=>navigate('research')} aria-label="技术支持 SkillGo · 关于 SkillHub"><SupportLogo/><span>技术支持 · SkillGo</span></button><span className="support-divider" aria-hidden="true">/</span><span>{meta?.workspace==='shared'?'独立部署 · 数据保存在服务器':'本地运行 · 数据保存在本机'}</span></footer>
+      </main>
+    </div>
+    {toast&&<div className="toast" role="status"><Check size={16}/>{toast}</div>}
+    {selected&&<DetailModal skill={selected} onClose={()=>setSelected(null)} favorite={()=>favorite(selected)} copy={copy}/>}
+    {modal==='publish'&&<PublishModal onClose={()=>setModal(null)} notify={notify} onPublished={()=>{setModal(null);reload();navigate('discover');}}/>}
+    {modal==='login'&&<Modal title="登录" onClose={()=>setModal(null)}><div className="login-placeholder"><p>登录方式暂未接入。</p><span>当前使用{meta?.workspace==='shared'?'共享':'本地'}工作区，可以正常发布、收藏和管理 API Key。</span><button className="secondary-btn" onClick={()=>setModal(null)}>知道了</button></div></Modal>}
+  </div>;
+}
+
+function DetailModal({skill,onClose,favorite,copy}:{skill:Skill;onClose:()=>void;favorite:()=>void;copy:(text:string)=>void}) {
+  const [tab,setTab]=useState('readme'),[versions,setVersions]=useState<{version:string;digest:string;changelog:string;created_at:string;commit:string|null}[]>([]),[markdown,setMarkdown]=useState(skill.markdown),[version,setVersion]=useState(skill.version),[error,setError]=useState(''),[bundle,setBundle]=useState<PackageMetadata|null>(null);
+  useEffect(()=>{let live=true;api<typeof versions>('skills/'+skill.id+'/versions').then(v=>{if(live)setVersions(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[skill.id]);
+  useEffect(()=>{let live=true;setBundle(null);api<PackageMetadata>('skills/'+skill.id+'/package?version='+version).then(v=>{if(live)setBundle(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[skill.id,version]);
+  const readVersion=async(v:string)=>{try{const r=await fetch('/api/v1/skills/'+skill.id+'/file?version='+v);if(!r.ok)throw new Error('无法加载版本');setMarkdown(await r.text());setVersion(v);setTab('readme');}catch(e){setError((e as Error).message);}};
+  return <Modal title={skill.name} onClose={onClose} wide>
+    <div className="detail-summary"><SkillIcon skill={skill}/><div><p>{skill.description}</p><span>{categoryLabels[skill.category]} <span className="footer-dot">·</span> {skill.license} <span className="footer-dot">·</span> v{version}</span></div><button className={`icon-btn ${skill.favorite?'saved':''}`} onClick={favorite} aria-label="切换收藏"><Bookmark size={20} fill={skill.favorite?'currentColor':'none'}/></button></div>
+    <div className="detail-actions"><a className="primary-btn" href={`/api/v1/skills/${skill.id}/download?version=${version}`}><ArrowDownToLine size={15}/>下载 ZIP</a>{bundle?.kind==='catalog-markdown'&&<span className="bundle-note">示例快照，仅含 SKILL.md</span>}</div>
+    <div className="detail-tabs"><button className={tab==='readme'?'active':''} onClick={()=>setTab('readme')}>SKILL.md</button><button className={tab==='files'?'active':''} onClick={()=>setTab('files')}>包内容</button><button className={tab==='versions'?'active':''} onClick={()=>setTab('versions')}>版本</button><button className={tab==='connect'?'active':''} onClick={()=>setTab('connect')}>API</button></div>
+    <div className="detail-scroll">{error&&<p className="form-error">{error}</p>}
+    {tab==='readme'?<><div className="source-file-bar"><span><FileCode2 size={14}/>SKILL.md <span>v{version}</span></span><button className="text-btn" onClick={()=>copy(markdown)}><Copy size={13}/>复制</button></div><Markdown text={markdown}/></>:tab==='files'?<div className="package-files">{bundle?bundle.files.map(file=><div key={file.path}><FileCode2 size={15}/><code>{file.path}</code><span>{(file.size/1024).toFixed(1)} KB</span></div>):<p className="muted">正在读取包内容…</p>}</div>:tab==='versions'?<div className="versions-list">{versions.map(v=><div key={v.version}><span className="version-node"><GitBranch size={16}/></span><div><strong>v{v.version}{v.version===skill.version&&<span className="featured-badge">Latest</span>}</strong><p>{v.changelog}</p><small>{new Date(v.created_at).toLocaleDateString('zh-CN')}</small></div><button className="secondary-btn" onClick={()=>readVersion(v.version)}>查看</button></div>)}</div>:<div className="connect-content"><h3>下载精确版本</h3><div className="code-block"><code>GET /api/v1/skills/{skill.id}/download?version={version}</code><button aria-label="复制下载 API" onClick={()=>copy(`/api/v1/skills/${skill.id}/download?version=${version}`)}><Copy size={15}/></button></div><p>上传的 ZIP 保持原始内容，可直接下载整个包。解压后放入 Agent 的技能目录。</p><dl className="metadata-list"><dt>ZIP 摘要</dt><dd>{bundle?.digest??'读取中…'}</dd><dt>SKILL.md 摘要</dt><dd>{versions.find(v=>v.version===version)?.digest??skill.digest}</dd><dt>声明适用</dt><dd>{skill.agents.map(a=>agentLabels[a]).join(' / ')}</dd></dl></div>}
+    </div>
+  </Modal>;
+}
+
+function PublishModal({onClose,notify,onPublished}:{onClose:()=>void;notify:(s:string)=>void;onPublished:()=>void}) {
+  const [file,setFile]=useState<File|null>(null),[version,setVersion]=useState('0.1.0'),[category,setCategory]=useState<Category>('development'),[license,setLicense]=useState('Unspecified'),[agents,setAgents]=useState<Agent[]>([...AGENTS]),[tags,setTags]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const choose=(value:File|undefined)=>{setError('');if(!value)return;if(!value.name.toLowerCase().endsWith('.zip')||value.size>5*1024*1024){setFile(null);setError('请选择不超过 5 MB 的 .zip 技能包');return;}setFile(value);};
+  const submit=async(e:FormEvent)=>{e.preventDefault();if(!file)return;setBusy(true);setError('');try{const form=new FormData();form.append('file',file);form.append('version',version);form.append('category',category);form.append('license',license);form.append('agents',JSON.stringify(agents));form.append('tags',JSON.stringify(tags.split(',').map(v=>v.trim()).filter(Boolean)));const response=await fetch('/api/v1/skills',{method:'POST',body:form});const result=await response.json() as {error?:{message:string}};if(!response.ok)throw new Error(result.error?.message??'上传失败');notify('技能已发布');onPublished();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  return <Modal title="发布技能" onClose={onClose} wide><form className="publish-form" onSubmit={submit}>
+    <label className={`zip-upload ${file?'has-file':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();choose(e.dataTransfer.files[0]);}}><ArrowDownToLine size={26}/><strong>{file?file.name:'选择或拖入 ZIP 技能包'}</strong><span>{file? (file.size/1024).toFixed(1)+' KB':'包含 SKILL.md，可附带脚本、参考资料和资源文件。'}</span><small>最大 5 MB</small><input type="file" accept=".zip,application/zip" aria-label="选择 ZIP 技能包" onChange={e=>choose(e.target.files?.[0])}/></label>
+    <div className="upload-guide"><span>SKILL.md 位于根目录或单一顶层文件夹。</span><a className="text-btn" href="/api/v1/package-template">下载示例包 <ArrowDownToLine size={13}/></a></div>
+    <div className="form-grid"><label className="field">版本<input value={version} onChange={e=>setVersion(e.target.value)} required/></label><label className="field">分类<select value={category} onChange={e=>setCategory(e.target.value as Category)}>{CATEGORIES.map(c=><option key={c} value={c}>{categoryLabels[c]}</option>)}</select></label></div>
+    <details className="publish-options"><summary>更多发布信息</summary><label className="field">许可证<input value={license} onChange={e=>setLicense(e.target.value)} required maxLength={80}/></label><label className="field">标签<input value={tags} onChange={e=>setTags(e.target.value)} placeholder="以英文逗号分隔"/></label><fieldset className="agent-fieldset"><legend>声明适用的 Agent</legend>{AGENTS.map(a=><label key={a}><input type="checkbox" checked={agents.includes(a)} onChange={e=>setAgents(e.target.checked?[...agents,a]:agents.filter(x=>x!==a))}/>{agentLabels[a]}</label>)}</fieldset></details>
+    {error&&<div className="form-error" role="alert">{error}</div>}<div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose}>取消</button><button className="primary-btn" disabled={busy||!file||!agents.length}>{busy&&<Loader2 size={15} className="spin"/>}{busy?'正在发布…':'发布技能'}</button></div>
+  </form></Modal>;
+}
+
+function ApiView({meta,notify,copy}:{meta:Meta|null;notify:(s:string)=>void;copy:(text:string)=>void}) {
+  const [keys,setKeys]=useState<{id:string;name:string;prefix:string;scope:string}[]>([]),[name,setName]=useState(''),[scope,setScope]=useState('read'),[token,setToken]=useState(''),[busy,setBusy]=useState(false),[keyError,setKeyError]=useState('');
+  const [endpoint,setEndpoint]=useState('skills'),[result,setResult]=useState(''),[running,setRunning]=useState(false),[apiFile,setApiFile]=useState<File|null>(null);
+  const loadKeys=()=>api<typeof keys>('keys').then(setKeys).catch(e=>setKeyError(e.message));
+  useEffect(()=>{if(meta?.user)loadKeys();},[meta?.user?.id]);
+  const createKey=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setKeyError('');try{const r=await api<{token:string}>('keys',{method:'POST',body:JSON.stringify({name,scope})});setToken(r.token);setName('');loadKeys();notify('API Key 已创建，仅展示一次');}catch(e){setKeyError((e as Error).message);}finally{setBusy(false);}};
+  const revoke=async(id:string)=>{try{await api('keys/'+id,{method:'DELETE'});setToken('');loadKeys();notify('API Key 已撤销');}catch(e){setKeyError((e as Error).message);}};
+  const run=async()=>{setRunning(true);try{let options:RequestInit={};if(endpoint==='upload'){if(!apiFile)throw new Error('请选择 ZIP 包');const form=new FormData();form.append('file',apiFile);options={method:'POST',body:form};}const r=await fetch('/api/v1/'+(endpoint==='upload'?'skills':endpoint),options);setResult('HTTP '+r.status+'\n'+JSON.stringify(await r.json(),null,2));}catch(e){setResult((e as Error).message);}finally{setRunning(false);}};
+  const endpoints=[['GET','/skills','搜索、分类与分页'],['POST','/skills','上传标准 ZIP 技能包'],['GET','/skills/{id}','技能详情'],['GET','/skills/{id}/versions','不可变版本'],['GET','/skills/{id}/package','包内容与摘要'],['GET','/skills/{id}/download','完整 ZIP 下载'],['PUT / DELETE','/skills/{id}/favorite','收藏管理'],['GET','/package-template','下载 ZIP 示例包'],['GET / POST','/keys','查询与创建 API Key'],['DELETE','/keys/{id}','撤销 API Key'],['GET / POST','/messages','查看与发布便利贴'],['GET','/messages/{id}','查看完整留言']];
+  return <><section className="page-heading"><span className="eyebrow">DEVELOPERS</span><h1>为你的工作流而开放。</h1><p>界面能做的事，你的应用也能。用一套 API 接入 SkillHub。</p></section><div className="api-overview"><span className="api-overview-icon"><Terminal size={30}/></span><div><span className="eyebrow">REST API · V1</span><h2>REST API · v1</h2><p>标准 JSON、精确版本、统一错误格式。API Key 支持只读或读写权限。</p></div><a className="secondary-btn" href="/api/v1/openapi.json" target="_blank" rel="noreferrer"><ArrowDownToLine size={15}/>OpenAPI 3.1</a></div><div className="api-columns"><section className="surface-panel"><div className="panel-heading"><h2>接口一览</h2><span className="subtle-tag">/api/v1</span></div><div className="endpoint-list">{endpoints.map(([method,path,label])=><div key={method+path}><span className={`method-badge ${method.startsWith('POST')?'post':''}`}>{method}</span><div><code>{path}</code><small>{label}</small></div></div>)}</div><a className="text-btn" href="/api/v1/openapi.json" target="_blank" rel="noreferrer">查看完整接口契约 <ArrowUpRight size={14}/></a></section><section className="surface-panel playground"><div className="panel-heading"><h2>在线试一试</h2><span className="live-tag"><i/>LIVE</span></div><p>直接调用当前运行的 API。</p><label className="field">选择接口<select value={endpoint} onChange={e=>setEndpoint(e.target.value)}><option value="skills">GET /skills</option><option value="meta">GET /meta</option><option value="upload">POST /skills · 上传 ZIP</option></select></label>{endpoint==='upload'&&<label className="field">ZIP 文件<input type="file" accept=".zip,application/zip" onChange={e=>setApiFile(e.target.files?.[0]??null)}/></label>}<button className="primary-btn" onClick={run} disabled={running}>{running?<Loader2 className="spin" size={15}/>:<Terminal size={15}/>}发送请求</button><pre className="api-result" aria-live="polite">{result||'// 返回结果会显示在这里'}</pre></section></div><section className="surface-panel keys-panel"><div className="panel-heading"><div><h2>API Keys</h2><p>密钥仅在创建时展示，数据库保存单向摘要。</p></div><LockKeyhole size={20}/></div>{meta?.user?<><form className="key-create" onSubmit={createKey}><input aria-label="API Key 名称" placeholder="例如：开发环境" value={name} onChange={e=>setName(e.target.value)} required maxLength={60}/><select aria-label="API Key 权限" value={scope} onChange={e=>setScope(e.target.value)}><option value="read">只读</option><option value="write">读写</option></select><button className="primary-btn" disabled={busy}>{busy?<Loader2 className="spin" size={14}/>:<Plus size={14}/>}创建密钥</button></form>{token&&<div className="created-key"><strong>请保存密钥，关闭页面后无法再次查看。</strong><div><code>{token}</code><button className="icon-btn" onClick={()=>copy(token)} aria-label="复制新密钥"><Copy size={16}/></button></div></div>}{keys.length>0?<div className="key-list">{keys.map(k=><div key={k.id}><KeyIcon/><strong>{k.name}</strong><code>{k.prefix}…</code><span className="subtle-tag">{k.scope==='read'?'只读':'读写'}</span><button className="icon-btn" onClick={()=>revoke(k.id)} aria-label={'撤销 '+k.name}><Trash2 size={15}/></button></div>)}</div>:<p className="muted">还没有 API Key。</p>}</>:<p className="muted">正在加载工作区…</p>}{keyError&&<p className="form-error">{keyError}</p>}<div className="api-auth-note"><p>调用时使用 <code>Authorization: Bearer sg_…</code>。{meta?.workspace==='shared'?'当前服务器使用共享工作区，无需登录。':'本机默认使用本地工作区，无需登录。'}</p></div></section></>;
+}
+function KeyIcon(){return <LockKeyhole size={16} className="muted"/>;}
+function ResearchView() {
+  const rows=[{name:'Vercel Skills',url:'https://github.com/vercel-labs/skills',good:'通用 SKILL.md 格式与多 Agent 生态。',choice:'保留通用格式；发布只接收 ZIP，不提供 GitHub 导入。',icon:Terminal},{name:'ClawHub',url:'https://github.com/openclaw/clawhub',good:'注册表、不可变版本与完整的 API。',choice:'借鉴版本与 API 模型，完整保存上传包。',icon:Layers3},{name:'SkillHub Local',url:'https://github.com/mjalalimanesh/skillhub-local',good:'集中管理本机技能，清晰展示内容。',choice:'保持极简 PC 工作台，专注搜索、发布、下载和收藏。',icon:LayoutDashboard}];
+  return <><section className="page-heading"><span className="eyebrow">ABOUT</span><h1>关于 SkillHub。</h1><p>一个简单的技能库。</p></section><div className="research-grid">{rows.map(row=><article className="surface-panel research-card" key={row.name}><span className="skill-icon"><row.icon size={24}/></span><h2>{row.name}</h2><h4>值得借鉴</h4><p>{row.good}</p><h4>我们的选择</h4><p>{row.choice}</p><a className="text-btn" href={row.url} target="_blank" rel="noreferrer">查看调研项目 <ArrowUpRight size={14}/></a></article>)}</div></>;
+}

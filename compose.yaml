@@ -1,0 +1,25 @@
+name: skillhub
+services:
+  skillhub:
+    build:
+      context: .
+      args:
+        NODE_IMAGE: ${NODE_IMAGE:-node:22-bookworm-slim}
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmjs.org}
+    image: skillhub:latest
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${SKILLHUB_BIND_IP:-0.0.0.0}:${SKILLHUB_PORT:-3356}:3356"
+    environment:
+      SKILLHUB_WORKSPACE_ORIGINS: ${SKILLHUB_WORKSPACE_ORIGINS:?Set the exact server origin in .env}
+    volumes:
+      - skillhub-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  skillhub-data:
+    name: skillhub-data

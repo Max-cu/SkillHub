@@ -1,0 +1,16 @@
+.git
+.openai
+.agents
+.codex
+.sites-runtime
+.wrangler
+.env*
+node_modules
+dist
+.next
+.vinext
+outputs
+work
+data
+backups
+*.tsbuildinfo

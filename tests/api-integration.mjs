@@ -1,0 +1,60 @@
+import assert from 'node:assert/strict';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { zipSync, strToU8, unzipSync } from 'fflate';
+import { createHash } from 'node:crypto';
+const base=process.env.SKILLGO_TEST_ORIGIN??'http://127.0.0.1:5173';
+if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw new Error('Local QA only.');
+const skillId='qa-skill-'+Date.now();let assertions=0;const keys=[];
+const check=(condition,label)=>{assert.ok(condition,label);assertions++;};
+const hash=bytes=>'sha256:'+createHash('sha256').update(bytes).digest('hex');
+const markdown=`---\nname: ${skillId}\ndescription: Local ZIP QA fixture, never executed.\n---\n\n# Test\nVerify upload and download.`;
+const resources=new Uint8Array(600000);for(let i=0;i<resources.length;i++)resources[i]=(i*37+13)%256;
+const archive=zipSync({[skillId+'/SKILL.md']:strToU8(markdown),[skillId+'/scripts/example.py']:strToU8('print("QA example only")'),[skillId+'/assets/data.bin']:resources},{level:0});
+async function request(path,method='GET',body,headers={}){
+  const response=await fetch(base+'/api/v1/'+path,{method,headers:{...(body instanceof FormData?{}:body?{'Content-Type':'application/json'}:{}),...headers},...(body?{body:body instanceof FormData?body:JSON.stringify(body)}:{})});
+  const text=await response.text();let value;try{value=JSON.parse(text);}catch{value={error:{message:text}};}return {status:response.status,data:value.data,error:value.error};
+}
+const form=(version='1.0.0',bytes=archive,extra={})=>{const value=new FormData();value.set('file',new Blob([bytes],{type:'application/zip'}),'fixture.zip');value.set('version',version);value.set('category','development');value.set('agents','["codex"]');value.set('license','MIT');value.set('tags','["qa"]');for(const [name,entry]of Object.entries(extra))value.set(name,entry);return value;};
+try{
+  check((await request('health')).data.status==='ok','database available');
+  const meta=(await request('meta')).data;check(meta.user.id==='local-workspace'&&meta.workspace==='local'&&!meta.loginConfigured,'fixed workspace and deferred login');
+  check((await request('skills?q=react&category=development')).data.items.some(s=>s.id==='react-best-practices'),'search and category');
+  check((await request('skills?limit=1000')).status===400,'pagination bounds');
+  const contract=(await (await fetch(base+'/api/v1/openapi.json')).json());check(!contract.paths['/imports']&&!contract.paths['/recipes']&&!contract.paths['/recommendations'],'removed APIs absent from contract');
+  check(contract.paths['/skills'].post.requestBody.content['multipart/form-data'],'multipart contract exists');
+  for(const [path,method]of [['imports','POST'],['recommendations','POST'],['recipes','GET'],['recipes','POST'],['recipes/old/lock','GET']])check((await request(path,method,method==='POST'?{}:undefined)).status===404,'removed route '+path);
+  check((await request('skills','POST',{markdown})).status===415,'raw markdown/JSON publication disabled');
+  check((await request('skills','POST',form(),{Origin:'https://evil.test'})).status===403,'cross-site upload blocked');
+  const first=await request('skills','POST',form());check(first.status===201,JSON.stringify(first));check(first.data.owner==='local-workspace'&&!first.data.source,'local owner and no remote import');
+  check((await request('skills','POST',form())).status===409,'versions are immutable');
+  check((await request('skills','POST',form('1.1.0',archive,{id:'react-best-practices'}))).status===403,'ownership cannot be overwritten');
+  const info=(await request('skills/'+skillId+'/package')).data;check(info.kind==='uploaded'&&info.files.length===3&&info.digest===hash(archive),'complete manifest and digest');
+  check(info.files.some(f=>f.path==='assets/data.bin'&&f.size===600000),'binary resource manifest');
+  const download=await fetch(base+'/api/v1/skills/'+skillId+'/download');const downloaded=new Uint8Array(await download.arrayBuffer());check(download.headers.get('content-type')==='application/zip','ZIP content type');check(download.headers.get('x-package-digest')===hash(archive),'package digest header');check(Buffer.from(downloaded).equals(Buffer.from(archive)),'chunked storage preserves exact archive bytes');
+  check(Buffer.from(unzipSync(downloaded)[skillId+'/assets/data.bin']).equals(Buffer.from(resources)),'binary resource survives download');
+  const raw=await fetch(base+'/api/v1/skills/'+skillId+'/file');check(await raw.text()===markdown,'markdown read API');
+  const updated=zipSync({[skillId+'/SKILL.md']:strToU8(markdown+'\nUpdated.'),[skillId+'/references/readme.md']:strToU8('New reference')});
+  check((await request('skills','POST',form('1.10.0',updated))).status===201,'higher version accepted');
+  check((await request('skills/'+skillId)).data.version==='1.10.0','latest version uses numeric order');
+  const historical=await fetch(base+'/api/v1/skills/'+skillId+'/download?version=1.0.0');check(Buffer.from(await historical.arrayBuffer()).equals(Buffer.from(archive)),'old ZIP stays exact after update');
+  check((await request('skills/'+skillId+'/package?version=1.0.0')).data.files.length===3,'historical manifest persists');
+  check((await request('skills/'+skillId+'/package?version=9.0.0')).status===404,'unknown package version rejected');
+  const concurrent=await Promise.all([request('skills','POST',form('2.0.0')),request('skills','POST',form('2.0.0'))]);check(concurrent.filter(r=>r.status===201).length===1&&concurrent.filter(r=>r.status===409).length===1,'atomic concurrent publication');
+  check((await request('skills','POST',form('3.0.0',zipSync({'README.md':strToU8('no skill')})))).status===400,'missing SKILL.md rejected');
+  check((await request('skills','POST',form('3.0.0',archive,{url:'https://github.com/owner/repo'}))).status===400,'remote source fields rejected');
+  const template=await fetch(base+'/api/v1/package-template');const example=unzipSync(new Uint8Array(await template.arrayBuffer()));check(!!example['my-skill/SKILL.md']&&!!example['my-skill/references/example.md'],'standard example ZIP API');
+  const sample=(await request('skills/frontend-design/package')).data;check(sample.kind==='catalog-markdown'&&sample.files.length===1,'existing static examples accurately labeled');
+  check((await request('skills/'+skillId+'/favorite','PUT')).status===200,'favorite add via API');
+  check((await request('skills?favorites=true')).data.items.some(s=>s.id===skillId),'favorites query');
+  const key=await request('keys','POST',{name:'Local ZIP QA',scope:'read'});check(key.status===201&&key.data.token.startsWith('sg_'),'key create via API');keys.push(key.data.id);
+  check(!(await request('keys')).data.some(k=>'token'in k||'hash'in k),'key list omits secrets');
+  const auth={Authorization:'Bearer '+key.data.token};check((await request('skills','GET',undefined,auth)).status===200,'read key works');check((await request('skills/'+skillId+'/favorite','DELETE',undefined,auth)).status===403,'read key cannot mutate');
+  check((await request('keys/'+key.data.id,'DELETE')).status===200,'key revoke via API');check((await request('meta','GET',undefined,auth)).status===401,'revoked key rejected');
+  check((await request('skills/'+skillId+'/favorite','DELETE')).status===200,'favorite remove via API');
+  await mkdir('outputs',{recursive:true});await writeFile('outputs/qa-upload.zip',archive);await writeFile('outputs/qa-ui.json',JSON.stringify({skillId,version:'3.0.0'}));
+  console.log(`PASS: ${assertions} local API assertions; ZIP bytes, resources, historical versions, API-only workflow and removed routes verified.`);
+}finally{
+  for(const id of keys)await request('keys/'+id,'DELETE').catch(()=>{});
+  await request('skills/'+skillId+'/favorite','DELETE').catch(()=>{});
+  await mkdir('outputs',{recursive:true});await writeFile('outputs/qa-cleanup.sql',`DELETE FROM favorites WHERE skill_id='${skillId}';\nDELETE FROM package_chunks WHERE skill_id='${skillId}';\nDELETE FROM packages WHERE skill_id='${skillId}';\nDELETE FROM versions WHERE skill_id='${skillId}';\nDELETE FROM skills WHERE id='${skillId}';\n`);
+}
