@@ -9,6 +9,7 @@ import { inspectPackage, markdownPackage, packageTemplate, MAX_ZIP_BYTES, type P
 import { workspaceMode } from './workspace';
 import { readAiConfig } from './ai-service.mjs';
 import { requireAdmin,decideReview,withdrawCommunity,moderateCommunity,retryAi,type Review,type UserRole } from './community';
+import { enforceRateLimit, RATE_RULES } from './rate-limit';
 import { authConfig, handleAuth, sessionIdentity, checkBrowserMutation } from './auth';
 
 const now = () => new Date().toISOString();
@@ -87,6 +88,39 @@ async function getSkill(id:string,userId:string,version?:string) {
   if(!row)throw new ApiError(404,'skill_not_found','技能或可访问版本不存在');
   const favorited=await db().prepare('SELECT skill_id FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(userId,id).first();
   return mapSkill(row,favorited?[id]:[],userId);
+}
+type SkillQueryOptions={scope:string;agent?:string|null;category?:string|null;q?:string;favoritesOnly?:boolean;sort:string;offset:number;limit:number};
+// Server-side filtering, search (including SKILL.md body), ordering and pagination; only the
+// favorite subset and final projection stay in JS so the database does the heavy lifting.
+async function querySkills(userId:string,opts:SkillQueryOptions) {
+  const pool=getPool();
+  const conds:string[]=[];const values:unknown[]=[userId];
+  const chosen=opts.scope==='community'?'s.community_version':`CASE WHEN s.owner=$1 THEN ${newestVersion} ELSE s.community_version END`;
+  if(opts.scope==='mine')conds.push('s.owner=$1');
+  else if(opts.scope==='community')conds.push('s.community_version IS NOT NULL');
+  else conds.push('(s.owner=$1 OR s.community_version IS NOT NULL)');
+  conds.push(`v.version=${chosen}`);
+  if(opts.scope==='community')conds.push('$1::text IS NOT NULL');
+  if(opts.agent){conds.push(`v.metadata::json->'agents' @> $${values.push(JSON.stringify([opts.agent]))}::jsonb`);}
+  if(opts.category){
+    if(!CATEGORIES.includes(opts.category as typeof CATEGORIES[number]))throw new ApiError(400,'invalid_category','无效分类');
+    conds.push(`(COALESCE(v.ai_category, CASE WHEN v.metadata::json->>'category'='auto' AND v.ai_status='error' THEN 'productivity' WHEN v.metadata::json->>'category'='auto' THEN NULL ELSE v.metadata::json->>'category' END, s.category)=$${values.push(opts.category)})`);
+  }
+  if(opts.favoritesOnly)conds.push(`EXISTS(SELECT 1 FROM favorites f WHERE f.user_id=$1 AND f.skill_id=s.id)`);
+  if(opts.q){
+    const like='%'+opts.q.replace(/[\\%_]/g,m=>'\\'+m)+'%';
+    const qi=values.push(like);
+    conds.push(`(LOWER(COALESCE(v.metadata::json->>'name',s.name)) LIKE LOWER($${qi}) OR LOWER(s.id) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_summary,v.metadata::json->>'description',s.description)) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_tags::text,v.metadata::json->'tags'::text)) LIKE LOWER($${qi}) OR LOWER(COALESCE(s.source,'')) LIKE LOWER($${qi}) OR EXISTS(SELECT 1 FROM versions vb WHERE vb.skill_id=s.id AND LOWER(vb.markdown) LIKE LOWER($${qi})))`);
+  }
+  const where=' WHERE '+conds.join(' AND ');
+  const order=opts.sort==='newest'?'s.created_at DESC,s.name':opts.sort==='name'?'s.name':opts.sort==='compact'?'length(v.markdown) ASC,s.name':'s.featured DESC,s.name';
+  const totalRow=await pool.query(`SELECT count(*)::integer AS n FROM skills s JOIN versions v ON v.skill_id=s.id${where}`,values);
+  const rows=await pool.query(skillQuery+where+` ORDER BY ${order} LIMIT $${values.push(opts.limit)} OFFSET $${values.push(opts.offset)}`,values);
+  const favRes=await pool.query('SELECT skill_id FROM favorites WHERE user_id=$1',[userId]);
+  const favIds=(favRes.rows as {skill_id:string}[]).map(f=>f.skill_id);
+  const items=(rows.rows as Record<string,unknown>[]).map(r=>mapSkill(r,favIds,userId));
+  const total=totalRow.rows[0].n as number;
+  return {items:items.map(({markdown: _m,...s})=>s),total};
 }
 const reviewQuery=`SELECT r.id,r.skill_id AS "skillId",r.version,r.status,r.reason,r.decision_source AS "decisionSource",r.ai_status AS "aiStatus",r.ai_model AS "aiModel",r.created_at AS "createdAt",r.reviewed_at AS "reviewedAt",r.submitter,u.display_name AS "displayName",v.metadata::json->>'name' AS name,COALESCE(v.ai_summary,v.metadata::json->>'description') AS description FROM community_reviews r JOIN auth_users u ON u.id=r.submitter JOIN versions v ON v.skill_id=r.skill_id AND v.version=r.version`;
 async function reviewSkill(reviewId:string) {
@@ -224,7 +258,7 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.7.3', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.7.4', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
@@ -277,7 +311,10 @@ export async function handle(request: Request) {
         return json(mapMessage(message));
       }
       if (method === 'POST' && path.length === 1) {
-        const user = await identity(request,true,true), value = validateMessage(await body(request));
+        const user=(await identity(request,true,true))!;
+        enforceRateLimit(RATE_RULES.messagePost,[user.userId]);
+        enforceRateLimit(RATE_RULES.messagePostHour,[user.userId]);
+        const value = validateMessage(await body(request));
         const message: BoardMessage = {id:crypto.randomUUID(),...value,createdAt:now()};
         await db().prepare('INSERT INTO messages (id,owner,author,content,color,created_at,position_x,position_y) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)').bind(message.id,user!.userId,message.author,message.content,message.color,message.createdAt,message.position?.x??null,message.position?.y??null).run();
         return json(message,201);
@@ -288,24 +325,25 @@ export async function handle(request: Request) {
       return json({ agents: AGENTS, categories: CATEGORIES, skillCount: list.length, sourceCount: new Set(list.filter(s => s.source).map(s => s.source)).size, favoriteCount: visible.filter(s => s.favorite).length, workspace: authConfig().mode==='cas'?'cas':'local', loginConfigured:authConfig().mode==='cas',aiEnabled:readAiConfig().enabled, user: user ? { id:user.userId,displayName:user.displayName,email:user.email,scope:user.scope,role:user.role } : null });
     }
     if (path[0] === 'skills' && !path[1] && method === 'GET') {
-      const user=currentUser;let list=await allSkills(user.userId,url.searchParams.get('scope')??(url.searchParams.get('favorites')==='true'?'all':'mine'));
-      const agent = url.searchParams.get('agent'), category = url.searchParams.get('category'), q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
-      if (agent) { validAgent(agent); list = list.filter(s => s.agents.includes(agent as Skill['agents'][number])); }
-      if (category) { if (!CATEGORIES.includes(category as typeof CATEGORIES[number])) throw new ApiError(400, 'invalid_category', '无效分类'); list = list.filter(s => s.category === category); }
-      if (q) list = list.filter(s => [s.name,s.id,s.description,...s.tags,s.source].some(v => v.toLowerCase().includes(q)));
-      if (url.searchParams.get('favorites') === 'true') list = list.filter(s => s.favorite);
-      const sort = url.searchParams.get('sort') ?? 'featured';
-      if (!['featured','newest','name','compact'].includes(sort)) throw new ApiError(400, 'invalid_sort', '无效排序');
-      list.sort((a,b) => sort === 'newest' ? b.createdAt.localeCompare(a.createdAt) : sort === 'name' ? a.name.localeCompare(b.name) : sort === 'compact' ? a.tokenEstimate - b.tokenEstimate : Number(b.featured)-Number(a.featured) || a.name.localeCompare(b.name));
-      const offset = Number(url.searchParams.get('offset') ?? 0), limit = Number(url.searchParams.get('limit') ?? 24);
-      if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100) throw new ApiError(400, 'invalid_pagination', 'offset ≥ 0，limit 为 1–100');
-      const total = list.length; return json({ items: list.slice(offset,offset+limit).map(({markdown,...s}) => s), total, offset, limit, nextOffset: offset+limit < total ? offset+limit : null });
+      const user=currentUser!;
+      const scope=url.searchParams.get('scope')??(url.searchParams.get('favorites')==='true'?'all':'mine');
+      if(!['mine','community','all'].includes(scope))throw new ApiError(400,'invalid_scope','scope 为 mine、community 或 all');
+      const agent=url.searchParams.get('agent'); if(agent)validAgent(agent);
+      const category=url.searchParams.get('category');
+      const q=(url.searchParams.get('q')??'').trim();
+      const sort=url.searchParams.get('sort')??'featured';
+      if(!['featured','newest','name','compact'].includes(sort))throw new ApiError(400,'invalid_sort','无效排序');
+      const offset=Number(url.searchParams.get('offset')??0),limit=Number(url.searchParams.get('limit')??24);
+      if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>100)throw new ApiError(400,'invalid_pagination','offset ≥ 0，limit 为 1–100');
+      const {items,total}=await querySkills(user.userId,{scope,agent,category,q:q||undefined,favoritesOnly:url.searchParams.get('favorites')==='true',sort,offset,limit});
+      return json({items,total,offset,limit,nextOffset:offset+limit<total?offset+limit:null});
     }
-    if (path[0] === 'skills' && !path[1] && method === 'POST') { const user = await identity(request, true, true); const {input,archive}=await upload(request); return json(await publish(input, user!.userId,archive), 201); }
+    if (path[0] === 'skills' && !path[1] && method === 'POST') { const user = await identity(request, true, true); enforceRateLimit(RATE_RULES.upload,[user!.userId]); const {input,archive}=await upload(request); return json(await publish(input, user!.userId,archive), 201); }
     if (path[0] === 'skills' && path[1]) {
       const id=path[1],user=currentUser;
       if(method==='POST'&&((path.length===3&&path[2]==='ai')||(path.length===5&&path[2]==='reviews'&&path[4]==='ai-retry'))) {
         const writer=(await identity(request,true,true))!;if(!readAiConfig().enabled)throw new ApiError(503,'ai_disabled','AI 功能尚未启用');
+        enforceRateLimit(RATE_RULES.aiRetry,[writer.userId]);
         if(path[2]==='ai') {const input=await body(request);if(input.version!==undefined&&typeof input.version!=='string')throw new ApiError(400,'invalid_version','无效版本');const skill=await getSkill(id,writer.userId,input.version as string|undefined);return json(await retryAi(id,writer.userId,skill.version));}
         const review=await db().prepare('SELECT version FROM community_reviews WHERE id=$1 AND skill_id=$2 AND submitter=$3').bind(path[3],id,writer.userId).first<{version:string}>();if(!review)throw new ApiError(404,'review_not_found','审核记录不存在');return json(await retryAi(id,writer.userId,review.version,path[3]));
       }

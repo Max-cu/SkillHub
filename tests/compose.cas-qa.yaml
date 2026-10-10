@@ -10,6 +10,12 @@ services:
       SKILLHUB_CAS_SERVICE: http://127.0.0.1:3356/
       SKILLHUB_CAS_BASE_URL: http://cas-mock:8123/cas
       SKILLHUB_DATABASE_URL: postgresql://skillhub_app:${SKILLHUB_CAS_QA_APP_PASSWORD:?Dedicated QA password required}@skillhub-postgres:5432/skillhub
+      # Suites issue many uploads/notes/logins against one container; raise limiter ceilings in QA only.
+      SKILLHUB_RATE_LIMIT_MESSAGE: '500'
+      SKILLHUB_RATE_LIMIT_MESSAGE_HOUR: '5000'
+      SKILLHUB_RATE_LIMIT_AI_RETRY: '500'
+      SKILLHUB_RATE_LIMIT_UPLOAD: '500'
+      SKILLHUB_RATE_LIMIT_AUTH: '500'
     depends_on:
       skillhub-postgres: {condition: service_healthy}
       cas-mock: {condition: service_started}

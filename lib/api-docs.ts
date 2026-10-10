@@ -16,7 +16,7 @@ const titles: Record<string, string> = {
   'POST /skills/{id}/ai':'重试 AI 整理','POST /skills/{id}/reviews/{reviewId}/ai-retry':'重试 AI 审核','DELETE /admin/skills/{id}/community':'管理员下架社区技能','POST /admin/skills/{id}/community/unblock':'解除下架限制','DELETE /messages/{id}':'管理员删除便签','POST /skills/{id}/community':'提交社区审核','DELETE /skills/{id}/community':'撤回社区','GET /skills/{id}/reviews':'我的审核记录','GET /admin/reviews':'社区审核列表','GET /admin/reviews/{id}':'审核记录','GET /admin/reviews/{id}/skill':'查看提交版本','GET /admin/reviews/{id}/file':'读取提交原文','GET /admin/reviews/{id}/package':'查看提交包内容','GET /admin/reviews/{id}/download':'下载提交版本','POST /admin/reviews/{id}/decision':'通过或驳回审核','GET /auth/login':'公司登录', 'POST /auth/cas/exchange':'交换登录票据', 'GET /auth/me':'当前登录身份', 'POST /auth/logout':'退出登录',
 };
 const descriptions: Record<string, string> = {
-  q:'搜索名称、描述或标签。', category:'技能分类。', favorites:'只查看工作区收藏，设为 true。',
+  q:'搜索名称、描述、标签或 SKILL.md 正文。', category:'技能分类。', favorites:'只查看工作区收藏，设为 true。',
   offset:'从第几条开始，配合 limit 分页。', limit:'每页条数。', agent:'按声明适用的 Agent 过滤。', sort:'结果排序。',
   id:'技能 ID；留言和密钥接口使用对应记录的 ID。发布时省略则取 frontmatter.name。', version:'数字 x.y.z；上传可省略以自动递增，读取省略时为自己最新版或已通过的社区版本。',
   file:'ZIP 最大 50 MiB；包含一个 UTF-8 SKILL.md（不区分大小写），支持最多 12 层目录；缺失元数据自动推断，完整保留所有资源。',

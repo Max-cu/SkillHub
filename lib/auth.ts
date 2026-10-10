@@ -3,6 +3,7 @@ import { getDb } from '../db/index';
 import { ApiError } from './domain';
 import { readAuthConfig } from './cas-config.mjs';
 import { validateCasTicket, validateTicketInput } from './cas-protocol';
+import { enforceRateLimit, RATE_RULES, clientKey } from './rate-limit';
 
 export type SessionUser={userId:string;displayName:string;role:'user'|'admin';scope:'write';kind:'session'};
 const hash=(token:string)=>createHash('sha256').update(token).digest('hex');
@@ -42,6 +43,7 @@ export async function handleAuth(request:Request,path:string[],parseBody:(r:Requ
   if(new URL(request.url).origin!==new URL(config.service).origin)throw new ApiError(400,'service_mismatch','请使用已登记的 SkillHub 地址登录');
   const cookies=names(config.secure),db=getDb();
   if(route==='login'&&method==='GET') {
+    enforceRateLimit(RATE_RULES.authAttempt,[clientKey(request)]);
     const supplied=new URL(request.url).searchParams.get('service');
     if(supplied!==null&&supplied!==config.service)throw new ApiError(400,'service_mismatch','登录回调地址不匹配');
     const token=randomBytes(32).toString('hex');
@@ -51,6 +53,7 @@ export async function handleAuth(request:Request,path:string[],parseBody:(r:Requ
     return new Response(null,{status:302,headers:{Location:url.href,'Set-Cookie':cookieValue(cookies.attempt,token,600,config.secure),'Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
   }
   if(route==='cas/exchange'&&method==='POST') {
+    enforceRateLimit(RATE_RULES.authExchange,[clientKey(request)]);
     checkBrowserMutation(request,new URL(config.service).origin,true);
     const input=await parseBody(request),ticket=validateTicketInput(input.ticket);
     if(input.service!==config.service)throw new ApiError(400,'service_mismatch','票据回调地址不匹配');
