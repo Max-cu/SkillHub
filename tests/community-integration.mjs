@@ -88,11 +88,11 @@ try {
  const bodySlug='body-search-'+randomUUID().slice(0,8);
  const bodyBytes=zipSync({'SKILL.md':strToU8('---\nname: '+bodySlug+'\ndescription: Generic listed description.\n---\n\n# Workflow\nUse the ZANZIBAR_QA_MARKER phrase only inside this body.\n')});
  const bodyForm=new FormData();bodyForm.append('file',new Blob([bodyBytes]),bodySlug+'.zip');bodyForm.append('version','1.0.0');
- const bodyUp=await req('skills',a,'POST',bodyForm);check(bodyUp.status,201);const bodyId=bodyUp.data.id;
- const bodyHits=await req('skills?scope=mine&q=ZANZIBAR_QA_MARKER',a);
+ const bodyUp=await req('skills',{user:a,method:'POST',body:bodyForm});check(bodyUp.status,201);const bodyId=bodyUp.data.id;
+ const bodyHits=await req('skills?scope=mine&q=ZANZIBAR_QA_MARKER',{user:a});
  check(bodyHits.data.total,1);check(bodyHits.data.items[0].id,bodyId);
- check((await req('skills/'+bodyId,a,'DELETE')).status,200);
- check((await req('skills?scope=mine&category=documentation',a)).status,200);
+ check((await req('skills/'+bodyId,{user:a,method:'DELETE'})).status,200);
+ check((await req('skills?scope=mine&category=documentation',{user:a})).status,200);
  const v3=bundle(slug,'3.0.0');check((await req('skills',{user:a,method:'POST',body:v3.form})).status,201);const p4=await submit('3.0.0');check(p4.status,201);
  check((await req('skills/'+id+'/favorite',{user:b,method:'PUT'})).status,200);
  check((await req('skills/'+id+'/community',{user:b,method:'DELETE'})).status,404);
