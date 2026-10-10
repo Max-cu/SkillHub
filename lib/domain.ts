@@ -55,7 +55,7 @@ export function validatePublish(body: Record<string, unknown>,packageMetadata?:R
   const markdown = body.markdown as string; const meta = packageMetadata??parseSkill(markdown);
   const version = body.version;
   if (typeof version !== 'string' || version.length > 32 || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version) || version.split('.').some(v => Number(v)>999999999)) throw new ApiError(400, 'invalid_version', '版本必须为 x.y.z，每段不超过 999999999');
-  if (!CATEGORIES.includes(body.category as typeof CATEGORIES[number])) throw new ApiError(400, 'invalid_category', '请选择技能分类');
+  if (!['auto',...CATEGORIES].includes(body.category as string)) throw new ApiError(400, 'invalid_category', '请选择技能分类');
   if (!Array.isArray(body.agents) || !body.agents.length || body.agents.length > AGENTS.length) throw new ApiError(400, 'invalid_agents', '至少声明一个适用 Agent');
   const agents = [...new Set(body.agents.map(validAgent))];
   if (typeof body.license !== 'string' || !body.license.trim() || body.license.length > 80) throw new ApiError(400, 'invalid_license', '请填写许可证');

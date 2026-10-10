@@ -69,7 +69,8 @@ const approvedVersion = `(EXISTS(SELECT 1 FROM community_reviews cr WHERE cr.ski
 const skillQuery = `SELECT s.*,v.version,v.markdown,v.digest,v.metadata,v.ai_status,v.ai_summary,v.ai_category,v.ai_tags,(SELECT count(*)::integer FROM favorites f WHERE f.skill_id=s.id) AS favorite_count,(SELECT cr.status FROM community_reviews cr WHERE cr.skill_id=s.id AND cr.version=v.version ORDER BY cr.created_at DESC LIMIT 1) AS review_status FROM skills s JOIN versions v ON v.skill_id=s.id`;
 function mapSkill(row: Record<string, unknown>, favoriteIds: string[] = [],viewer?:string): Skill {
   const markdown = row.markdown as string, metadata=JSON.parse(row.metadata as string||'{}');
-  return { id: row.id as string,importWarnings:viewer===row.owner?(metadata.importWarnings??[]):[],aiStatus:row.ai_status as Skill['aiStatus'],originalDescription:metadata.description??row.description,communityBlocked:!!row.community_blocked,moderationReason:viewer===row.owner?(row.moderation_reason as string):'',slug:row.slug as string,name:metadata.name??row.name, description:row.ai_summary??metadata.description??row.description, category:row.ai_category??metadata.category??row.category, agents:metadata.agents??JSON.parse(row.agents as string), tags:row.ai_tags?JSON.parse(row.ai_tags as string):metadata.tags??JSON.parse(row.tags as string), source: row.source as string, sourcePath:metadata.sourcePath??row.source_path, commit: row.commit as string | null, license:metadata.license??row.license, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, communityVersion:row.community_version as string|null,reviewStatus:viewer===row.owner?(row.review_status as Skill['reviewStatus']??null):null, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
+  const category=row.ai_category??(metadata.category==='auto'?(row.ai_status==='error'?'productivity':'auto'):metadata.category)??row.category;
+  return { id: row.id as string,importWarnings:viewer===row.owner?(metadata.importWarnings??[]):[],aiStatus:row.ai_status as Skill['aiStatus'],originalDescription:metadata.description??row.description,communityBlocked:!!row.community_blocked,moderationReason:viewer===row.owner?(row.moderation_reason as string):'',slug:row.slug as string,name:metadata.name??row.name, description:row.ai_summary??metadata.description??row.description, category:category as Skill['category'], agents:metadata.agents??JSON.parse(row.agents as string), tags:row.ai_tags?JSON.parse(row.ai_tags as string):metadata.tags??JSON.parse(row.tags as string), source: row.source as string, sourcePath:metadata.sourcePath??row.source_path, commit: row.commit as string | null, license:metadata.license??row.license, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, communityVersion:row.community_version as string|null,reviewStatus:viewer===row.owner?(row.review_status as Skill['reviewStatus']??null):null, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
 }
 async function allSkills(userId:string,scope='mine') {
   if(!['mine','community','all'].includes(scope))throw new ApiError(400,'invalid_scope','scope 为 mine、community 或 all');
@@ -108,6 +109,8 @@ async function publish(input: Record<string, unknown>, userId: string, archive: 
   const explicit=input.version??archive.info.declaredVersion;
   const version=explicit??(previous?previous.version.split('.').map((part,index)=>index===2?Number(part)+1:Number(part)).join('.'):'0.1.0');
   const s=validatePublish({...input,id:requestedId,version},archive.info.metadata);
+  // Without AI there is no later categorization pass, so resolve the upload placeholder to a real category.
+  if(s.category==='auto'&&!readAiConfig().enabled)s.category='productivity';
   if(previous&&compareVersion(s.version,previous.version)<=0)throw new ApiError(409,'version_conflict','新版本必须高于当前版本；已上传版本不可覆盖');
   const contentDigest=await digest(s.markdown),sourcePath=archive.info.entryPath;
   const metadata=JSON.stringify({name:s.name,description:s.description,category:s.category,agents:s.agents,tags:s.tags,license:s.license,sourcePath,importWarnings:archive.info.warnings});
@@ -221,7 +224,7 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.7.2', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.7.3', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
@@ -288,7 +291,7 @@ export async function handle(request: Request) {
       const user=currentUser;let list=await allSkills(user.userId,url.searchParams.get('scope')??(url.searchParams.get('favorites')==='true'?'all':'mine'));
       const agent = url.searchParams.get('agent'), category = url.searchParams.get('category'), q = (url.searchParams.get('q') ?? '').trim().toLowerCase();
       if (agent) { validAgent(agent); list = list.filter(s => s.agents.includes(agent as Skill['agents'][number])); }
-      if (category) { if (!CATEGORIES.includes(category as Skill['category'])) throw new ApiError(400, 'invalid_category', '无效分类'); list = list.filter(s => s.category === category); }
+      if (category) { if (!CATEGORIES.includes(category as typeof CATEGORIES[number])) throw new ApiError(400, 'invalid_category', '无效分类'); list = list.filter(s => s.category === category); }
       if (q) list = list.filter(s => [s.name,s.id,s.description,...s.tags,s.source].some(v => v.toLowerCase().includes(q)));
       if (url.searchParams.get('favorites') === 'true') list = list.filter(s => s.favorite);
       const sort = url.searchParams.get('sort') ?? 'featured';
