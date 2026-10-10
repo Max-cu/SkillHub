@@ -106,7 +106,7 @@ try {
  const edited=await req('skills/'+id,{user:a,method:'PATCH',body:{name:'Edited display name',description:'Edited owner description.',category:'design',agents:['cursor'],tags:['edited']}});
  check(edited.status,200);check(edited.data.name,'Edited display name');check(edited.data.description,'Edited owner description.');check(edited.data.category,'design');check(edited.data.version,'3.0.0');check(edited.data.slug,slug);
  check(Buffer.from(await (await req('skills/'+id+'/download?version=3.0.0',{user:a})).response.arrayBuffer()),Buffer.from(v3.bytes));
- const storedMeta=(await pool.query("SELECT metadata->>'name' AS name,metadata->>'sourcePath' AS path FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0];
+ const storedMeta=(await pool.query("SELECT metadata::json->>'name' AS name,metadata::json->>'sourcePath' AS path FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0];
  check(storedMeta.name,'Edited display name');check(storedMeta.path,'SKILL.md');
  const reset=(await pool.query("SELECT ai_status,ai_summary FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0];
  check(reset.ai_status,'unprocessed');check(reset.ai_summary,null);
