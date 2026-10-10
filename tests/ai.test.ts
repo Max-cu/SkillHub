@@ -15,11 +15,15 @@ test('AI outputs must have complete bounded enum-based schemas',()=>{
  assert.throws(()=>parseAiResult('{"summary":"abcdefghijklmnopqrst","category":"root","tags":[]}','summary'));
  assert.equal(parseAiResult('```json\n{"summary":"这是一项用于自动整理企业内部资料的文档技能，适合撰写工作说明。","category":"documentation","tags":["文档"]}\n```','summary').category,'documentation');
 });
-test('AI archive extraction binds the exact digest and marks incomplete/binary inputs',()=>{
- const bytes=zipSync({'SKILL.md':strToU8('Full instructions'),'scripts/run.py':strToU8('print("test")'),'image.bin':new Uint8Array([0,255])});
- const digest='sha256:'+createHash('sha256').update(bytes).digest('hex');
- const input=inspectAiArchive(bytes,digest);assert.equal(input.complete,false);assert.equal(input.texts.length,2);assert.equal(input.files.length,3);
- assert.throws(()=>inspectAiArchive(bytes,'sha256:wrong'));
+test('AI archive extraction binds the exact digest; inert binary assets stay reviewable while unknown binaries defer to a human',()=>{
+ const inert=zipSync({'SKILL.md':strToU8('Full instructions'),'scripts/run.py':strToU8('print("test")'),'assets/logo.png':new Uint8Array([137,80,78,71,13,10,26,10])});
+ const digest='sha256:'+createHash('sha256').update(inert).digest('hex');
+ const input=inspectAiArchive(inert,digest);assert.equal(input.complete,true);assert.equal(input.texts.length,2);assert.equal(input.files.length,3);
+ assert.deepEqual(input.binaryAssets,[{path:'assets/logo.png',size:8}]);
+ assert.throws(()=>inspectAiArchive(inert,'sha256:wrong'));
+ const unknown=zipSync({'SKILL.md':strToU8('Full instructions'),'payload.bin':new Uint8Array([0,255])});
+ const unknownDigest='sha256:'+createHash('sha256').update(unknown).digest('hex');
+ assert.equal(inspectAiArchive(unknown,unknownDigest).complete,false);
 });
 test('AI reads nested case-insensitive skill entry before large resources, within a separate input budget',()=>{
  const bytes=zipSync({'assets/large.bin':new Uint8Array(6*1024*1024),'repo/skills/docs/sKiLl.Md':strToU8('# Actual instructions\n\nPrepare documentation from public notes.')},{level:0});

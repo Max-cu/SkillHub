@@ -36,7 +36,7 @@ export default function MessageBoard({ notify,isAdmin=false }: { notify: (messag
   useGSAP(() => {
     if (loading || !page?.items.length) return;
     const mm = gsap.matchMedia();
-    mm.add('(prefers-reduced-motion: no-preference)', () => { gsap.from('.note-placement', { y: 8, autoAlpha: 0, duration: .3, stagger: .025, ease: 'power2.out', clearProps: 'transform,opacity,visibility' }); });
+    mm.add('(prefers-reduced-motion: no-preference)', () => { gsap.from('.note-placement', { y: 12, autoAlpha: 0, duration: .5, stagger: .04, ease: 'power3.out', clearProps: 'transform,opacity,visibility' }); });
     return () => mm.revert();
   }, { scope: root, dependencies: [loading, page], revertOnUpdate: true });
   const inspect = async (id: string) => {

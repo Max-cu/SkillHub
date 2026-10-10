@@ -62,7 +62,7 @@ export default function SkillHub() {
     const mm=gsap.matchMedia();
     mm.add('(prefers-reduced-motion: no-preference)',()=>{
       const targets=root.current?.querySelectorAll('.site-header, .hero-copy');
-      if(targets?.length) gsap.from(targets,{y:8,autoAlpha:0,duration:.45,stagger:.08,ease:'power2.out',clearProps:'transform,opacity,visibility'});
+      if(targets?.length) gsap.from(targets,{y:12,autoAlpha:0,duration:.6,stagger:.1,ease:'power3.out',clearProps:'transform,opacity,visibility'});
     });
     return()=>mm.revert();
   },{scope:root});
@@ -77,15 +77,15 @@ export default function SkillHub() {
       const cards=[...(root.current?.querySelectorAll<HTMLElement>('.skill-card')??[])];
       const fresh=cards.filter(card=>!animatedCards.current.has(card.dataset.skillId??''));
       for(const card of fresh)animatedCards.current.add(card.dataset.skillId??'');
-      if(fresh.length)gsap.from(fresh,{y:8,autoAlpha:0,stagger:.035,duration:.3,ease:'power2.out',clearProps:'transform,opacity,visibility'});
+      if(fresh.length)gsap.from(fresh,{y:14,autoAlpha:0,stagger:.06,duration:.55,ease:'power3.out',clearProps:'transform,opacity,visibility'});
       const empty=root.current?.querySelector('.empty-state');
-      if(empty)gsap.from(empty,{y:8,autoAlpha:0,duration:.3,ease:'power2.out',clearProps:'transform,opacity,visibility'});
+      if(empty)gsap.from(empty,{y:14,autoAlpha:0,duration:.5,ease:'power3.out',clearProps:'transform,opacity,visibility'});
     });
     return()=>mm.revert();
   },{scope:root,dependencies:[loading,skills,view],revertOnUpdate:true});
   const navigate=(next:View)=>{window.scrollTo({top:0,behavior:'instant'});setView(next);setCategory('');setQuery('');setSelected(null);setReviewContext(null);};
   const toastRef=useRef<HTMLDivElement>(null);
-  useGSAP(()=>{if(!toast)return;const mm=gsap.matchMedia();mm.add('(prefers-reduced-motion: no-preference)',()=>gsap.from(toastRef.current,{y:10,autoAlpha:0,duration:.28,ease:'power2.out',clearProps:'transform,opacity,visibility'}));return()=>mm.revert();},{dependencies:[toast]});
+  useGSAP(()=>{if(!toast)return;const mm=gsap.matchMedia();mm.add('(prefers-reduced-motion: no-preference)',()=>gsap.from(toastRef.current,{y:14,autoAlpha:0,duration:.4,ease:'power3.out',clearProps:'transform,opacity,visibility'}));return()=>mm.revert();},{dependencies:[toast]});
   const signedIn=()=>{if(meta?.user)return true;notify('正在确认登录身份，请稍后重试');return false;};
   const favorite=async(skill:Summary)=>{if(!signedIn())return;try{await api('skills/'+skill.id+'/favorite',{method:skill.favorite?'DELETE':'PUT'});notify(skill.favorite?'已移出收藏':'已加入收藏');if(selected?.id===skill.id)setSelected({...selected,favorite:!skill.favorite});reload();}catch(e){notify((e as Error).message);}};
   const inspect=async(skill:Summary)=>{try{setReviewContext(null);setSelected(await api<Skill>('skills/'+skill.id+'?version='+skill.version));}catch(e){notify((e as Error).message);}};
@@ -144,7 +144,7 @@ function DetailModal({skill,onClose,favorite,copy,owned,onChanged,onDeleted,revi
   useEffect(()=>{let live=true;setBundle(null);api<PackageMetadata>(resource+'/package?version='+version).then(v=>{if(live)setBundle(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[resource,version]);
   const readVersion=async(v:string)=>{try{const r=await fetch('/api/v1/'+resource+'/file?version='+v);if(!r.ok){if(r.status===401)window.dispatchEvent(new Event('skillhub-session-expired'));throw new Error('无法加载版本');}setMarkdown(await r.text());setVersion(v);setTab('readme');}catch(e){setError((e as Error).message);}};
   const scrollRef=useRef<HTMLDivElement>(null);
-  useGSAP(()=>{const mm=gsap.matchMedia();mm.add('(prefers-reduced-motion: no-preference)',()=>gsap.fromTo(scrollRef.current,{autoAlpha:0,y:4},{autoAlpha:1,y:0,duration:.22,ease:'power2.out',clearProps:'transform,opacity,visibility'}));return()=>mm.revert();},{dependencies:[tab,version,skill.id],revertOnUpdate:true});
+  useGSAP(()=>{const mm=gsap.matchMedia();mm.add('(prefers-reduced-motion: no-preference)',()=>gsap.fromTo(scrollRef.current,{autoAlpha:0,y:8},{autoAlpha:1,y:0,duration:.32,ease:'power3.out',clearProps:'transform,opacity,visibility'}));return()=>mm.revert();},{dependencies:[tab,version,skill.id],revertOnUpdate:true});
   const saveMetadata=async(e:FormEvent)=>{e.preventDefault();if(saving)return;setSaving(true);setMetaError('');try{await api('skills/'+skill.id,{method:'PATCH',body:JSON.stringify({name:editName.trim(),description:editDescription.trim(),category:editCategory,license:editLicense.trim()||'Unspecified',agents:editAgents,tags:editTags.split(',').map(t=>t.trim()).filter(Boolean)})});setEditing(false);notify('展示资料已更新');onChanged();}catch(e){setMetaError((e as Error).message);}finally{setSaving(false);}};
   const removeSkill=async()=>{if(deleting)return;setDeleting(true);try{await api('skills/'+skill.id,{method:'DELETE'});onDeleted();}catch(e){notify((e as Error).message);setDeleting(false);}};
   return <Modal title={skill.name} onClose={onClose} wide dismissible={!deleting}>

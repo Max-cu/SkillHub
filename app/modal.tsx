@@ -17,7 +17,7 @@ export default function Modal({ children, title, onClose, wide = false, dismissi
   }, []);
   useGSAP(() => {
     const mm = gsap.matchMedia();
-    mm.add('(prefers-reduced-motion: no-preference)', () => { gsap.from('.modal-panel', { y: 8, autoAlpha: 0, duration: .25, ease: 'power2.out' }); });
+    mm.add('(prefers-reduced-motion: no-preference)', () => { gsap.from('.modal-panel', { y: 14, autoAlpha: 0, duration: .35, ease: 'power3.out' }); });
     return () => mm.revert();
   }, { scope: ref });
   return <dialog ref={ref} className={`modal ${wide ? 'wide' : ''}`} aria-label={title} onCancel={e => { if (!dismissible) e.preventDefault(); }} onClose={onClose} onClick={e => { if (dismissible && e.target === e.currentTarget) onClose(); }}>

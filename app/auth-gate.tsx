@@ -35,7 +35,7 @@ export default function AuthGate({children}:{children:ReactNode}) {
     const mm=gsap.matchMedia();
     mm.add('(prefers-reduced-motion: no-preference)',()=>{
       const targets=shell.current?.querySelectorAll('.auth-content > *');
-      if(targets?.length)gsap.from(targets,{y:8,autoAlpha:0,duration:.4,stagger:.06,ease:'power2.out',clearProps:'transform,opacity,visibility'});
+      if(targets?.length)gsap.from(targets,{y:14,autoAlpha:0,duration:.6,stagger:.09,ease:'power3.out',clearProps:'transform,opacity,visibility'});
     });
     return()=>mm.revert();
   },{scope:shell,dependencies:[state?.authenticated,!!error],revertOnUpdate:true});
