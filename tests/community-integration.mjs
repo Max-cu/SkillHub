@@ -125,7 +125,7 @@ try {
  for(const suffix of ['','/versions','/file','/package','/download'])check((await req('skills/'+id+suffix,{user:a})).status,404);
  check((await req('skills?scope=community&q='+slug,{user:b})).data.total,0);
  check((await req('skills?favorites=true',{user:b})).data.items.some(s=>s.id===id),false);
- for(const table of ['skills','versions','packages','package_chunks','community_reviews','ai_jobs','favorites'])check((await pool.query('SELECT count(*)::integer AS n FROM '+table+' WHERE skill_id=$1',[id])).rows[0].n,0);
+ for(const [table,column] of [['skills','id'],['versions','skill_id'],['packages','skill_id'],['package_chunks','skill_id'],['community_reviews','skill_id'],['ai_jobs','skill_id'],['favorites','skill_id']])check((await pool.query('SELECT count(*)::integer AS n FROM '+table+' WHERE '+column+'=$1',[id])).rows[0].n,0);
  check((await req('skills/'+other.data.id,{user:b,method:'DELETE'})).status,200);
  check((await req('skills/'+other.data.id,{user:b})).status,404);
  const note=await req('messages',{user:a,method:'POST',body:{content:'QA deletable note',author:'QA'}});check(note.status,201);const noteId=note.data.id;
