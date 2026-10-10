@@ -9,6 +9,7 @@ export interface Skill {
   featured: boolean; createdAt: string; version: string; digest: string; markdown: string;
   slug: string; communityVersion: string | null; reviewStatus: 'pending'|'approved'|'rejected'|'withdrawn'|null;
   aiStatus:'unprocessed'|'queued'|'running'|'ready'|'error';originalDescription:string;communityBlocked:boolean;moderationReason:string;
+  importWarnings:string[];
   tokenEstimate: number; permissions: string[]; favorite: boolean; favoriteCount: number;
 }
 export interface PackageMetadata { digest: string; size: number; filename: string; root: string; files: {path:string;size:number}[]; kind: 'uploaded' | 'catalog-markdown'; }

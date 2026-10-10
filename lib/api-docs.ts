@@ -17,8 +17,8 @@ const titles: Record<string, string> = {
 const descriptions: Record<string, string> = {
   q:'搜索名称、描述或标签。', category:'技能分类。', favorites:'只查看工作区收藏，设为 true。',
   offset:'从第几条开始，配合 limit 分页。', limit:'每页条数。', agent:'按声明适用的 Agent 过滤。', sort:'结果排序。',
-  id:'技能 ID；留言和密钥接口使用对应记录的 ID。发布时省略则取 frontmatter.name。', version:'数字 x.y.z；读取时省略即为最新版。',
-  file:'标准 ZIP，最大 5 MiB。根目录或单一顶层文件夹包含一个 UTF-8 SKILL.md；完整保留脚本与资源。',
+  id:'技能 ID；留言和密钥接口使用对应记录的 ID。发布时省略则取 frontmatter.name。', version:'数字 x.y.z；上传可省略以自动递增，读取省略时为自己最新版或已通过的社区版本。',
+  file:'ZIP 最大 50 MiB；包含一个 UTF-8 SKILL.md（不区分大小写），支持最多 12 层目录；缺失元数据自动推断，完整保留所有资源。',
   license:'许可证声明。', agents:'JSON 数组字符串，例如 ["codex","claude-code"]。',
   tags:'JSON 数组字符串，例如 ["example"]。', description:'覆盖 SKILL.md 中的描述。', changelog:'本次版本说明。',
   content:'便签纯文本，不能为空。', author:'显示署名，省略时为匿名访客；不是登录身份。',

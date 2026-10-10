@@ -21,6 +21,17 @@ test('AI archive extraction binds the exact digest and marks incomplete/binary i
  const input=inspectAiArchive(bytes,digest);assert.equal(input.complete,false);assert.equal(input.texts.length,2);assert.equal(input.files.length,3);
  assert.throws(()=>inspectAiArchive(bytes,'sha256:wrong'));
 });
+test('AI reads nested case-insensitive skill entry before large resources, within a separate input budget',()=>{
+ const bytes=zipSync({'assets/large.bin':new Uint8Array(6*1024*1024),'repo/skills/docs/sKiLl.Md':strToU8('# Actual instructions\n\nPrepare documentation from public notes.')},{level:0});
+ const digest='sha256:'+createHash('sha256').update(bytes).digest('hex'),input=inspectAiArchive(bytes,digest);
+ assert.equal(input.complete,false);assert.equal(input.texts[0].path,'repo/skills/docs/sKiLl.Md');assert.equal(input.files.find(f=>f.path==='assets/large.bin')?.size,6*1024*1024);
+});
+test('A ZIP decoder omitted resource is never reported as fully reviewed',()=>{
+ const bytes=zipSync({'SKILL.md':strToU8('# Public instructions'),'safe-file':strToU8('Auxiliary instructions')},{level:0});
+ const from=Buffer.from('safe-file'),to=Buffer.from('__proto__');
+ for(let i=0;i<bytes.length-from.length;i++)if(from.every((b,j)=>bytes[i+j]===b)){bytes.set(to,i);i+=from.length-1;}
+ const hash='sha256:'+createHash('sha256').update(bytes).digest('hex');assert.equal(inspectAiArchive(bytes,hash).complete,false);
+});
 test('AI calls never follow redirects or accept truncated/invalid success bodies',async()=>{
  const config=readAiConfig({SKILLHUB_AI_ENABLED:'true',SKILLHUB_AI_BASE_URL:'http://ai-mock:8124/v1',SKILLHUB_AI_MODEL:'qwen3.5'});
  const valid={choices:[{finish_reason:'stop',message:{content:'{"decision":"approve","reason":"内容用途明确且未发现不合规行为。"}'}}]};

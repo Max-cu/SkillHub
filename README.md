@@ -176,13 +176,21 @@ curl -fsS "$BASE/api/v1/admin/skills/$SKILL_ID/community/unblock" -H "Authorizat
 
 服务器忽略的 `.env` 可配置：`SKILLHUB_AI_ENABLED=true`、`SKILLHUB_AI_BASE_URL`、`SKILLHUB_AI_MODEL`、`SKILLHUB_AI_TIMEOUT_SECONDS`（默认 90，5–180）、可选 `SKILLHUB_AI_API_KEY`。未启用时保持人工审核与上传声明。模型服务离线不导致上传失败，也不会把失败当通过。
 
+### 与 SkillGo 的导入兼容
+
+2026-10-10 对照服务器 `3399` SkillGo 的运行代码和实际配置：ZIP 50 MiB、展开 250 MiB、20000 文件，兼容缺省元数据、中文显示名称、小写入口、多层目录与 Windows 分隔符。Hub 同步这些导入规则，保留独立数据、凭据和鉴权，不引入 SkillGo 执行环境或运行上传脚本。
+
+省略版本时，新技能从 0.1.0 开始，同一所有者同一 slug 的后续上传自动递增 patch；包内有效的 SkillGo 数字版本或用户明确指定的版本保持不可覆盖校验。前端不再强制填默认版本。有效但缺失的资料自动推断，导入提示在技能详情及 API 的 `importWarnings` 中返回；格式损坏的 YAML、危险路径和损坏 CRC 仍拒绝。
+
+普通上传、异步总结和社区审核分开：能够导入不代表已经公开。AI 先读取实际入口 SKILL.md，原包完整保存；大资源、二进制及超出模型文本预算的内容留给人工审核，不因模型读取预算而拒绝上传。
+
 ### ZIP 上传字段与格式
 
 | 字段 | 规则 / 默认值 |
 | --- | --- |
 | `file` | 必填，一个标准 `.zip` |
 | `id` | 创建时为当前用户的 slug，默认为 frontmatter.name；更新可用自己的 data.id 或 data.slug；返回 data.id 才是详情 API 的 ID |
-| `version` | `x.y.z`，默认 `0.1.0` |
+| `version` | 选填 `x.y.z`；优先包内兼容的 SkillGo 清单版本，否则新技能为 0.1.0、已有技能自动递增 patch；显式版本必须更高 |
 | `category` | 上述五种分类，默认 `development` |
 | `license` | 发布者声明，默认 `Unspecified` |
 | `agents` | JSON 数组字符串，默认四种 Agent 标签 |
@@ -190,7 +198,7 @@ curl -fsS "$BASE/api/v1/admin/skills/$SKILL_ID/community/unblock" -H "Authorizat
 | `description` | 可选，覆盖 frontmatter.description |
 | `changelog` | 可选版本说明 |
 
-包根目录或单一顶层文件夹中必须恰好有一个 `SKILL.md`；可附带脚本、参考和资源：
+ZIP 中必须恰好有一个 `SKILL.md`（名称不区分大小写），可位于最多 12 层的目录，其他目录资源同样保留；可附带脚本、参考和资源：
 
 ```text
 my-skill/
@@ -200,7 +208,7 @@ my-skill/
   assets/example.json
 ```
 
-SKILL.md 使用 UTF-8 和 YAML frontmatter：
+SKILL.md 使用 UTF-8；推荐带 YAML Frontmatter，但普通 Markdown 也可以导入：
 
 ```markdown
 ---
@@ -213,7 +221,7 @@ description: Explain what this skill does and when to use it.
 Complete the task and verify the result.
 ```
 
-name 使用小写字母、数字和短横线；description 为 5–2000 字符。ZIP 最大 5 MiB、最多 200 条目、展开合计最大 20 MiB、单文件最大 5 MiB、SKILL.md 最大 150 KB。支持 Store / Deflate；拒绝加密、ZIP64、分卷、符号链接、路径穿越、重复路径、Windows 不安全名称及大小/CRC 不匹配。校验不执行包内脚本。
+显示名称可用中文、大写字母、下划线等；系统单独生成稳定的安全 slug，不改写原文。Frontmatter 可省略或缺少 name/description，资料会从目录、标题、正文或 SkillGo 清单推断，所有者可查看导入提示。已存在但格式损坏或未闭合的 YAML 仍会拒绝。ZIP 最大 50 MiB、最多 20000 个文件、展开合计和单文件最大 250 MiB；SKILL.md 为非空 UTF-8 文本，最多 200000 字符。支持 Store / Deflate；支持有界的小型本地 ZIP64 文件头；拒绝加密、完整 ZIP64 中央目录、分卷、符号链接、路径穿越、重复路径、Windows 不安全名称及大小/CRC 不匹配。校验不执行包内脚本。
 
 ### 留言白板 API
 
@@ -386,6 +394,8 @@ CAS 模拟回归使用 `tests/compose.cas-qa.yaml` 和 `tests/cas-integration.mj
 同日 `0.5.0` 已更新到现有服务器：24 项单元测试、136 项登录回归、128 项三账号权限模拟、旧数据迁移检查和会话重启检查通过。正式环境验证未登录的新管理与社区 API 返回 401，原有业务数据校验一致，SkillHub / SkillGo 数据库容器均未改变。未在正式库创建测试技能、便签或审核记录，未指定任何管理员。管理和私有库的三账号结果来自隔离模拟；真实管理员 UI 需要使用者手动指定角色后验证。
 
 同日 `0.6.0` 已上线内网 AI 工作流。用户选择 `http://10.2.98.242:31015/v1` 提供的 `deepSeek-v4-pro`。类型检查、28 项单元测试、136 项 CAS 回归、128 项私有库与管理员检查、66 项模拟 AI 工作流检查、迁移及重启检查通过；另有 15 项真实模型全流程检查通过（隔离数据库、两个模拟身份、人工编写的无业务数据样例），验证总结/分类/标签、AI 自动批准与 ZIP 字节保留。正式环境后台进程、鉴权和原数据校验通过，手工指定的 `yuanjiaju` 管理员身份保留，SkillGo 数据库容器未改动。真实模型验收与模拟身份测试分别记录，不将模拟账号当成真实公司双账号验收。
+
+2026-10-10 `0.6.1` 已上线导入兼容修复。只读检查 SkillGo 的运行包验证与分析代码，用 9 类人工编写 ZIP 调用其纯验证函数：全部接受，旧 Hub 拒绝其中 8 类，修复后的 Hub 全部接受。类型检查、36 项单元检查、136 项 CAS 回归、128 项私有库与管理员检查、65 项实际上传/下载/自动版本检查，以及 15 项真实内网模型的无 Frontmatter 嵌套包流程检查通过。原始版本和 ZIP、所有者及手工角色校验一致；SkillGo API/Web/PG 与 SkillHub PG 容器均未重建或重启。未往正式业务库写测试数据。
 
 旧工作区服务器回归使用 `tests/compose.pg-qa.yaml`：独立 `skillhub-pg-qa` 项目、私有测试网络、测试 PG 卷和单独测试密码，无宿主机端口。不要对正式库执行会写数据的测试。单元测试覆盖 ZIP 完整性、大小、路径、版本、便签以及防误连配置；API 测试覆盖 PG 中的原包下载、并发版本、收藏、Key 权限和留言持久化。
 

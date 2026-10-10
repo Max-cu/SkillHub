@@ -69,7 +69,7 @@ const approvedVersion = `(EXISTS(SELECT 1 FROM community_reviews cr WHERE cr.ski
 const skillQuery = `SELECT s.*,v.version,v.markdown,v.digest,v.metadata,v.ai_status,v.ai_summary,v.ai_category,v.ai_tags,(SELECT count(*)::integer FROM favorites f WHERE f.skill_id=s.id) AS favorite_count,(SELECT cr.status FROM community_reviews cr WHERE cr.skill_id=s.id AND cr.version=v.version ORDER BY cr.created_at DESC LIMIT 1) AS review_status FROM skills s JOIN versions v ON v.skill_id=s.id`;
 function mapSkill(row: Record<string, unknown>, favoriteIds: string[] = [],viewer?:string): Skill {
   const markdown = row.markdown as string, metadata=JSON.parse(row.metadata as string||'{}');
-  return { id: row.id as string,aiStatus:row.ai_status as Skill['aiStatus'],originalDescription:metadata.description??row.description,communityBlocked:!!row.community_blocked,moderationReason:viewer===row.owner?(row.moderation_reason as string):'',slug:row.slug as string,name:metadata.name??row.name, description:row.ai_summary??metadata.description??row.description, category:row.ai_category??metadata.category??row.category, agents:metadata.agents??JSON.parse(row.agents as string), tags:row.ai_tags?JSON.parse(row.ai_tags as string):metadata.tags??JSON.parse(row.tags as string), source: row.source as string, sourcePath:metadata.sourcePath??row.source_path, commit: row.commit as string | null, license:metadata.license??row.license, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, communityVersion:row.community_version as string|null,reviewStatus:viewer===row.owner?(row.review_status as Skill['reviewStatus']??null):null, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
+  return { id: row.id as string,importWarnings:viewer===row.owner?(metadata.importWarnings??[]):[],aiStatus:row.ai_status as Skill['aiStatus'],originalDescription:metadata.description??row.description,communityBlocked:!!row.community_blocked,moderationReason:viewer===row.owner?(row.moderation_reason as string):'',slug:row.slug as string,name:metadata.name??row.name, description:row.ai_summary??metadata.description??row.description, category:row.ai_category??metadata.category??row.category, agents:metadata.agents??JSON.parse(row.agents as string), tags:row.ai_tags?JSON.parse(row.ai_tags as string):metadata.tags??JSON.parse(row.tags as string), source: row.source as string, sourcePath:metadata.sourcePath??row.source_path, commit: row.commit as string | null, license:metadata.license??row.license, owner: row.owner as string, featured: !!row.featured, createdAt: row.created_at as string, version: row.version as string, markdown, digest: row.digest as string, communityVersion:row.community_version as string|null,reviewStatus:viewer===row.owner?(row.review_status as Skill['reviewStatus']??null):null, tokenEstimate: Math.ceil(markdown.length / 4), permissions: permissions(markdown), favorite: favoriteIds.includes(row.id as string), favoriteCount: Number(row.favorite_count ?? 0) };
 }
 async function allSkills(userId:string,scope='mine') {
   if(!['mine','community','all'].includes(scope))throw new ApiError(400,'invalid_scope','scope 为 mine、community 或 all');
@@ -99,13 +99,18 @@ function textInput(value: unknown, field: string, min = 1, max = 500) {
   return value.trim();
 }
 async function publish(input: Record<string, unknown>, userId: string, archive: {bytes:Uint8Array;info:PackageInfo;filename:string;digest:string}) {
-  const s=validatePublish(input),database=db(),time=now();
-  const existing=await database.prepare('SELECT id,slug FROM skills WHERE owner=$1 AND (id=$2 OR slug=$2)').bind(userId,s.id).first<{id:string;slug:string}>();
-  if(!existing&&/^sk-[a-f0-9-]{36}$/.test(s.id))throw new ApiError(404,'skill_not_found','技能不存在');
-  const skillId=existing?.id??'sk-'+crypto.randomUUID(),slug=existing?.slug??s.id;
-  if(existing&&compareVersion(s.version,(await getSkill(skillId,userId)).version)<=0)throw new ApiError(409,'version_conflict','新版本必须高于当前版本；已上传版本不可覆盖');
-  const contentDigest=await digest(s.markdown),sourcePath=archive.info.root+'SKILL.md';
-  const metadata=JSON.stringify({name:s.name,description:s.description,category:s.category,agents:s.agents,tags:s.tags,license:s.license,sourcePath});
+  const database=db(),time=now(),requestedId=input.id??archive.info.metadata.slug;
+  if(typeof requestedId!=='string'||!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(requestedId)||requestedId.length>100)throw new ApiError(400,'invalid_id','无效的技能 ID');
+  const existing=await database.prepare('SELECT id,slug FROM skills WHERE owner=$1 AND (id=$2 OR slug=$2)').bind(userId,requestedId).first<{id:string;slug:string}>();
+  if(!existing&&/^sk-[a-f0-9-]{36}$/.test(requestedId))throw new ApiError(404,'skill_not_found','技能不存在');
+  const skillId=existing?.id??'sk-'+crypto.randomUUID(),slug=existing?.slug??requestedId;
+  const previous=existing?await getSkill(skillId,userId):null;
+  const explicit=input.version??archive.info.declaredVersion;
+  const version=explicit??(previous?previous.version.split('.').map((part,index)=>index===2?Number(part)+1:Number(part)).join('.'):'0.1.0');
+  const s=validatePublish({...input,id:requestedId,version},archive.info.metadata);
+  if(previous&&compareVersion(s.version,previous.version)<=0)throw new ApiError(409,'version_conflict','新版本必须高于当前版本；已上传版本不可覆盖');
+  const contentDigest=await digest(s.markdown),sourcePath=archive.info.entryPath;
+  const metadata=JSON.stringify({name:s.name,description:s.description,category:s.category,agents:s.agents,tags:s.tags,license:s.license,sourcePath,importWarnings:archive.info.warnings});
   const statements:PgStatement[]=[];
   if(!existing)statements.push(database.prepare('INSERT INTO skills(id,slug,name,description,category,agents,tags,source,source_path,"commit",license,owner,featured,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)').bind(skillId,slug,s.name,s.description,s.category,JSON.stringify(s.agents),JSON.stringify(s.tags),'',sourcePath,null,s.license,userId,0,time));
   else statements.push(database.prepare('UPDATE skills SET name=$1,description=$2,category=$3,agents=$4,tags=$5,license=$6,source_path=$7 WHERE id=$8 AND owner=$9').bind(s.name,s.description,s.category,JSON.stringify(s.agents),JSON.stringify(s.tags),s.license,sourcePath,skillId,userId));
@@ -122,14 +127,14 @@ async function upload(request: Request) {
   const max=MAX_ZIP_BYTES+200_000, reader=request.body?.getReader();
   if (!reader) throw new ApiError(400,'file_required','请选择 ZIP 技能包');
   let length=0;const chunks:Uint8Array[]=[];
-  for (;;) {const {value,done}=await reader.read();if(done)break;length+=value.length;if(length>max){await reader.cancel();throw new ApiError(413,'package_too_large','ZIP 最大为 5 MB');}chunks.push(value);}
+  for (;;) {const {value,done}=await reader.read();if(done)break;length+=value.length;if(length>max){await reader.cancel();throw new ApiError(413,'package_too_large','ZIP 最大为 50 MB');}chunks.push(value);}
   const bytes=new Uint8Array(length);let at=0;for(const chunk of chunks){bytes.set(chunk,at);at+=chunk.length;}
   let form:FormData;try{form=await new Response(bytes,{headers:{'Content-Type':type}}).formData();}catch{throw new ApiError(400,'invalid_form','上传表单格式无效');}
   const file=form.get('file');
   if (!file || typeof file==='string' || !file.name.toLowerCase().endsWith('.zip') || form.getAll('file').length!==1) throw new ApiError(400,'zip_required','请选择一个 .zip 技能包');
   if (form.has('url') || form.has('markdown')) throw new ApiError(400,'unsupported_source','仅支持 ZIP 上传');
-  const archiveBytes=new Uint8Array(await file.arrayBuffer()), info=inspectPackage(archiveBytes);
-  const input:Record<string,unknown>={markdown:info.markdown,version:form.get('version')??'0.1.0',category:form.get('category')??'development',license:form.get('license')??'Unspecified'};
+  const archiveBytes=new Uint8Array(await file.arrayBuffer()), info=inspectPackage(archiveBytes,{filename:file.name});
+  const input:Record<string,unknown>={markdown:info.markdown,...(form.get('version')?{version:form.get('version')}:{}),category:form.get('category')??'development',license:form.get('license')??'Unspecified'};
   for(const field of ['id','description','changelog']) if(form.has(field))input[field]=form.get(field);
   for(const field of ['agents','tags']){const raw=form.get(field);if(raw!==null){if(typeof raw!=='string')throw new ApiError(400,'invalid_input',field+' 必须是 JSON 数组');try{input[field]=JSON.parse(raw);}catch{throw new ApiError(400,'invalid_input',field+' 必须是 JSON 数组');}}}
   input.agents??=[...AGENTS];input.tags??=[];
@@ -155,6 +160,9 @@ async function skillArtifact(skill:Skill,action:string) {
 }
 export async function handle(request: Request) {
   try {
+    // Large ZIP uploads must authenticate before their bodies are buffered.
+    const first=new URL(request.url).pathname.replace(/^\/api\/v1\/?/,'').split('/').filter(Boolean)[0];
+    if(!['auth','health','openapi.json'].includes(first))await identity(request,true);
     // Read incoming bodies with strict size limits before parsing or validation.
     if (request.body) {
       const max = request.headers.get('content-type')?.includes('application/json') ? 200_000 : MAX_ZIP_BYTES + 200_000;
@@ -176,7 +184,7 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.6.0', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.6.1', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
