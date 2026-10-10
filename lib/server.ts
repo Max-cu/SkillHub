@@ -1,7 +1,7 @@
 import { getDb, type PgStatement } from '../db/index';
-import { assertDatabase } from '../db/postgres.mjs';
+import { assertDatabase, getPool } from '../db/postgres.mjs';
 import catalog from './catalog.json';
-import { ApiError, compareVersion, digest, permissions, validAgent, validatePublish } from './domain';
+import { ApiError, compareVersion, digest, permissions, validAgent, validatePublish, validateMetadataUpdate } from './domain';
 import { AGENTS, CATEGORIES, type Skill } from './types';
 import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
@@ -140,6 +140,41 @@ async function upload(request: Request) {
   input.agents??=[...AGENTS];input.tags??=[];
   return {input,archive:{bytes:archiveBytes,info,filename:file.name.replace(/[^a-zA-Z0-9._-]/g,'_').slice(0,100)||'skill.zip',digest:await digest(archiveBytes)}};
 }
+async function deleteSkill(skillId:string,owner:string) {
+  const client=await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const row=await client.query('SELECT id FROM skills WHERE id=$1 AND owner=$2 FOR UPDATE',[skillId,owner]);
+    if(!row.rows.length)throw new ApiError(404,'skill_not_found','技能不存在');
+    // Hard delete removes versions, original ZIP chunks, reviews, moderation notes and other users' favorites in foreign-key order.
+    await client.query('DELETE FROM package_chunks WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM packages WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM ai_jobs WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM community_reviews WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM community_moderation WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM favorites WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM versions WHERE skill_id=$1',[skillId]);
+    await client.query('DELETE FROM skills WHERE id=$1',[skillId]);
+    await client.query('COMMIT');return {deleted:true};
+  }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+}
+async function updateSkillMetadata(skillId:string,owner:string,input:Record<string, unknown>) {
+  const update=validateMetadataUpdate(input);
+  const row=await db().prepare(`SELECT v.version,v.metadata,s.community_version,s.name,s.description,s.category,s.agents,s.tags,s.license FROM skills s JOIN versions v ON v.skill_id=s.id AND v.version=${newestVersion} WHERE s.id=$1 AND s.owner=$2`).bind(skillId,owner).first<{version:string;metadata:string;community_version:string|null;name:string;description:string;category:string;agents:string;tags:string;license:string}>();
+  if(!row)throw new ApiError(404,'skill_not_found','技能不存在');
+  const published=await db().prepare("SELECT 1 FROM community_reviews WHERE skill_id=$1 AND version=$2 AND (status='approved' OR (status='withdrawn' AND (reviewer IS NOT NULL OR decision_source='ai'))) LIMIT 1").bind(skillId,row.version).first();
+  if(row.community_version===row.version||published)throw new ApiError(409,'version_frozen','已通过的展示内容保持不变，请上传新版本');
+  const pending=await db().prepare("SELECT 1 FROM community_reviews WHERE skill_id=$1 AND version=$2 AND status='pending' LIMIT 1").bind(skillId,row.version).first();
+  if(pending)throw new ApiError(409,'review_pending','该版本正在审核，请先撤回或等待审核完成后再修改资料');
+  const metadata=JSON.parse(row.metadata||'{}');
+  for(const field of ['name','description','category','agents','tags','license'] as const)if(update[field]!==undefined)metadata[field]=update[field];
+  const statements=[db().prepare('UPDATE versions SET metadata=$1 WHERE skill_id=$2 AND version=$3').bind(JSON.stringify(metadata),skillId,row.version),
+    db().prepare('UPDATE skills SET name=$1,description=$2,category=$3,agents=$4,tags=$5,license=$6 WHERE id=$7 AND owner=$8').bind(update.name??row.name,update.description??row.description,update.category??row.category,JSON.stringify(update.agents??JSON.parse(row.agents)),JSON.stringify(update.tags??JSON.parse(row.tags)),update.license??row.license,skillId,owner)];
+  // Owner edits supersede a previous AI summary for the same fields; the owner may rerun the AI pass afterwards.
+  if(update.description!==undefined||update.category!==undefined||update.tags!==undefined)statements.push(db().prepare("UPDATE versions SET ai_status='unprocessed',ai_summary=NULL,ai_category=NULL,ai_tags=NULL WHERE skill_id=$1 AND version=$2").bind(skillId,row.version));
+  await db().batch(statements);
+  return getSkill(skillId,owner);
+}
 async function packageInfo(id:string,version:string,markdown:string) {
   const row=await db().prepare('SELECT digest,size,filename,root,files FROM packages WHERE skill_id=$1 AND version=$2').bind(id,version).first<{digest:string;size:number;filename:string;root:string;files:string}>();
   if(row)return {...row,files:JSON.parse(row.files),kind:'uploaded'};
@@ -184,7 +219,7 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.6.1', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.7.0', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
@@ -292,6 +327,8 @@ export async function handle(request: Request) {
         catch(error){if((error as {code?:string}).code==='23505')throw new ApiError(409,'review_exists','该版本已待审核或已通过');throw error;}
         return json({id:reviewId,skillId:id,version:skill.version,status:'pending'},201);
       }
+      if (method === 'DELETE' && path.length === 2) { const writer=(await identity(request,true,true))!; return json(await deleteSkill(id,writer.userId)); }
+      if (method === 'PATCH' && path.length === 2) { const writer=(await identity(request,true,true))!; return json(await updateSkillMetadata(id,writer.userId,await body(request))); }
       if (method === 'GET' && path.length === 2) return json(await getSkill(id,user.userId,url.searchParams.get('version')??undefined));
       if (method === 'GET' && path[2] === 'versions') { const skill=await getSkill(id,user.userId);const result=await db().prepare('SELECT v.version,v.digest,v.changelog,v.created_at,v."commit" FROM versions v JOIN skills s ON s.id=v.skill_id WHERE s.id=$1'+(skill.owner===user.userId?'':` AND ${approvedVersion}`)).bind(id).all<{version:string}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
       if (method==='GET' && path.length===3 && ['file','download','package'].includes(path[2])) {

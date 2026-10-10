@@ -43,6 +43,13 @@ curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X PUT "$BASE/api/v1/skil
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills?favorites=true"
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" -X DELETE "$BASE/api/v1/skills/$SKILL_ID/favorite"
 
+# 所有者编辑私有最新版的展示资料（至少一项；不改 SKILL.md 和原包）
+curl -fsS -X PATCH "$BASE/api/v1/skills/$SKILL_ID" -H "Authorization: Bearer $SKILLHUB_API_KEY" \
+  -H 'Content-Type: application/json' \
+  --data '{"description":"新的用途说明","tags":["react","hooks"]}'
+# 所有者永久删除整个技能（不可恢复，含全部版本与原包）
+curl -fsS -X DELETE "$BASE/api/v1/skills/$SKILL_ID" -H "Authorization: Bearer $SKILLHUB_API_KEY"
+
 # 发布更高版本，不覆盖已发布版本
 curl -fsS -H "Authorization: Bearer $SKILLHUB_API_KEY" "$BASE/api/v1/skills" \
   -F "file=@my-skill-new.zip" -F "id=$SKILL_ID" \
@@ -87,6 +94,7 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | GET | `/openapi.json` | OpenAPI 3.1 |
 | GET / POST | `/skills` | 搜索、过滤、分页 / ZIP 发布与新版本 |
 | GET | `/skills/{id}` | 最新版本详情及 SKILL.md |
+| PATCH / DELETE | `/skills/{id}` | 所有者编辑私有最新版展示资料 / 永久删除整个技能 |
 | GET | `/skills/{id}/versions` | 不可变版本记录 |
 | GET | `/skills/{id}/file?version=` | 指定版本 SKILL.md |
 | GET | `/skills/{id}/package?version=` | 包大小、文件清单、摘要及 kind |
@@ -114,6 +122,10 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 网页默认显示“我的技能”。自己的技能卡片底部，在“下载”左侧显示“发布到社区”；点击后提交卡片所示版本审核，并显示“待审核 / 已发布 / 重新提交”状态。技能详情保留审核记录与撤回操作。上传 ZIP 后只有所有者可列表、查看、下载或更新；管理员也不能读取未提交的私有技能。社区列表为 `GET /skills?scope=community`，只显示通过审核的版本。内置公开上游示例为已有社区内容；升级前个人上传的技能保留所有者，默认转为私有，历史工作区技能仍不会自动认领。
 
 提交时冻结具体版本的 SKILL.md、ZIP 和展示元数据，管理员只能通过 `/admin/reviews/{id}/...` 读取这一版本。新版本或描述变更不会替换已通过版本，必须重新提交。驳回说明只向所有者和管理员展示，可重新提交同一不可变版本。所有者可以撤回全部待审核和已通过版本；已撤回内容从社区、其他用户收藏及下载接口消失，私有数据仍保留。
+
+**编辑展示资料**：`PATCH /skills/{id}` 允许所有者修改自己技能最新版本的名称、描述、分类、Agent、标签和许可证，不必重新上传 ZIP；SKILL.md、原包字节与版本号保持不变。当前版本已通过社区审核、曾有通过记录，或正在待审核时返回 409——已通过的展示内容保持冻结，请上传新版本；待审核版本需先撤回。修改描述、分类或标签会重置该版本的 AI 整理结果（显示回到你填写的内容），之后可再次触发 AI 整理。
+
+**删除技能**：`DELETE /skills/{id}` 允许所有者永久删除自己的整个技能：全部版本、原始 ZIP 分块、审核记录、管理记录与其他用户的收藏一并移除，社区可见性随之消失，操作不可恢复。非所有者（包括管理员）访问返回 404，管理员下架社区内容请继续使用专门的管理接口。
 
 ```bash
 # 所有者提交某个版本；省略 version 默认私有最新版

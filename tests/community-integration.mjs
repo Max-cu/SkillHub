@@ -93,6 +93,41 @@ try {
  check((await req('skills?scope=community&q='+slug,{user:b})).data.total,0);
  check((await req('skills?favorites=true&q='+slug,{user:b})).data.items.some(s=>s.id===id),false);
  check((await req('skills/'+id,{user:a})).data.version,'3.0.0');
+ // PATCH: only the owner may edit display metadata of the latest private version; frozen or pending versions stay immutable.
+ check((await req('skills/'+id,{user:b,method:'PATCH',body:{description:'hijack'}})).status,404);
+ check((await req('skills/'+id,{headers:readA,method:'PATCH',body:{description:'hijack'}})).status,403);
+ check((await req('skills/'+id,{user:a,method:'PATCH',body:{description:'hijack'},headers:{Origin:'http://evil.invalid'}})).status,403);
+ check((await req('skills/'+id,{user:a,method:'PATCH',body:{}})).status,400);
+ check((await req('skills/'+id,{user:a,method:'PATCH',body:{description:'broken',category:'unknown'}})).status,400);
+ await pool.query("UPDATE versions SET ai_status='ready',ai_summary='AI summary',ai_category='design',ai_tags='[\"ai\"]' WHERE skill_id=$1 AND version='3.0.0'",[id]);
+ const licenseEdit=await req('skills/'+id,{user:a,method:'PATCH',body:{license:'Apache-2.0'}});
+ check(licenseEdit.status,200);check(licenseEdit.data.license,'Apache-2.0');check(licenseEdit.data.description,'AI summary');
+ check((await pool.query("SELECT ai_status,ai_summary FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0].ai_status,'ready');
+ const edited=await req('skills/'+id,{user:a,method:'PATCH',body:{name:'Edited display name',description:'Edited owner description.',category:'design',agents:['cursor'],tags:['edited']}});
+ check(edited.status,200);check(edited.data.name,'Edited display name');check(edited.data.description,'Edited owner description.');check(edited.data.category,'design');check(edited.data.version,'3.0.0');check(edited.data.slug,slug);
+ check(Buffer.from(await (await req('skills/'+id+'/download?version=3.0.0',{user:a})).response.arrayBuffer()),Buffer.from(v3.bytes));
+ const storedMeta=(await pool.query("SELECT metadata->>'name' AS name,metadata->>'sourcePath' AS path FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0];
+ check(storedMeta.name,'Edited display name');check(storedMeta.path,'SKILL.md');
+ const reset=(await pool.query("SELECT ai_status,ai_summary FROM versions WHERE skill_id=$1 AND version='3.0.0'",[id])).rows[0];
+ check(reset.ai_status,'unprocessed');check(reset.ai_summary,null);
+ const p5=await submit('3.0.0');check(p5.status,201);
+ check((await req('skills/'+id,{user:a,method:'PATCH',body:{description:'mid-review edit'}})).status,409);
+ check((await req('skills/'+id+'/community',{user:a,method:'DELETE'})).status,200);
+ const v4=bundle(slug,'4.0.0');check((await req('skills',{user:a,method:'POST',body:v4.form})).status,201);
+ const p6=await submit('4.0.0');check(p6.status,201);check((await decide(p6.data.id,'approve')).status,200);
+ check((await req('skills/'+id,{user:b})).data.version,'4.0.0');
+ check((await req('skills/'+id,{user:a,method:'PATCH',body:{description:'post-approval edit'}})).status,409);
+ // DELETE: hard-removes the owner's whole skill; non-owners and admins get 404, read keys 403.
+ check((await req('skills/'+id,{user:b,method:'DELETE'})).status,404);
+ check((await req('skills/'+id,{headers:readA,method:'DELETE'})).status,403);
+ check((await req('skills/'+id,{user:admin,method:'DELETE'})).status,404);
+ check((await req('skills/'+id,{user:a,method:'DELETE'})).status,200);
+ for(const suffix of ['','/versions','/file','/package','/download'])check((await req('skills/'+id+suffix,{user:a})).status,404);
+ check((await req('skills?scope=community&q='+slug,{user:b})).data.total,0);
+ check((await req('skills?favorites=true',{user:b})).data.items.some(s=>s.id===id),false);
+ for(const table of ['skills','versions','packages','package_chunks','community_reviews','ai_jobs','favorites'])check((await pool.query('SELECT count(*)::integer AS n FROM '+table+' WHERE skill_id=$1',[id])).rows[0].n,0);
+ check((await req('skills/'+other.data.id,{user:b,method:'DELETE'})).status,200);
+ check((await req('skills/'+other.data.id,{user:b})).status,404);
  const note=await req('messages',{user:a,method:'POST',body:{content:'QA deletable note',author:'QA'}});check(note.status,201);const noteId=note.data.id;
  for(const user of [a,b])check((await req('messages/'+noteId,{user,method:'DELETE'})).status,403);
  check((await req('messages/'+noteId,{headers:readAdmin,method:'DELETE'})).status,403);
@@ -109,5 +144,5 @@ try {
  const before=(await pool.query('SELECT role FROM auth_users WHERE id=$1',[b.id])).rows[0].role;
  check((await req('admin/users',{user:b,method:'POST',body:{role:'admin',id:b.id}})).status,403);
  check((await pool.query('SELECT role FROM auth_users WHERE id=$1',[b.id])).rows[0].role,before);
- console.log(`COMMUNITY_INTEGRATION_PASS ${checks} checks; three simulated accounts; private artifacts, frozen review, role revocation and note deletion verified.`);
+ console.log(`COMMUNITY_INTEGRATION_PASS ${checks} checks; three simulated accounts; private artifacts, frozen review, metadata edits, skill deletion, role revocation and note deletion verified.`);
 }finally{await pool.end();}

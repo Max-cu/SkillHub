@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { strToU8, zipSync } from 'fflate';
-import { ApiError, compareVersion, digest, parseSkill, validatePublish } from '../lib/domain.ts';
+import { ApiError, compareVersion, digest, parseSkill, validatePublish, validateMetadataUpdate } from '../lib/domain.ts';
 import { inspectPackage, MAX_ZIP_BYTES, packageTemplate } from '../lib/package.ts';
 import { MAX_EXPANDED_BYTES,MAX_FILES } from '../lib/package-limits.mjs';
 const markdown='---\nname: useful-skill\ndescription: A useful task workflow.\n---\n\n# Workflow\nComplete and verify the task.';
@@ -23,6 +23,11 @@ test('Publishing validates version, metadata and bounded SKILL.md',()=>{
 });
 test('Semantic versions sort numerically',()=>{
   assert.ok(compareVersion('1.10.0','1.9.0')>0);assert.ok(compareVersion('2.0.0','1.999.0')>0);assert.equal(compareVersion('1.0.0','1.0.0'),0);
+});
+test('Metadata updates accept optional display fields and reject invalid ones',()=>{
+  const update=validateMetadataUpdate({name:'新名称',description:'  trimmed description ',category:'design',agents:['codex','cursor'],tags:['a','b'],license:'MIT'});
+  assert.equal(update.name,'新名称');assert.equal(update.description,'trimmed description');assert.equal(update.category,'design');assert.deepEqual(update.agents,['codex','cursor']);assert.deepEqual(update.tags,['a','b']);assert.equal(update.license,'MIT');
+  for(const change of [{},{name:'  '},{description:''},{category:'unknown'},{agents:[]},{agents:['nope']},{tags:['x'.repeat(31)]},{tags:[1]},{license:''},{name:'x'.repeat(121)}])assert.throws(()=>validateMetadataUpdate(change as Record<string,unknown>),ApiError);
 });
 test('Existing example snapshots retain exact content digests',async()=>{
   const seeds=JSON.parse(readFileSync(new URL('../lib/catalog.json',import.meta.url),'utf8'));

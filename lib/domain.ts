@@ -66,6 +66,23 @@ export function validatePublish(body: Record<string, unknown>,packageMetadata?:R
   if (body.changelog !== undefined && (typeof body.changelog !== 'string' || body.changelog.length > 2000)) throw new ApiError(400, 'invalid_changelog', '更新说明最多 2000 字符');
   return { id, ...meta, description: (body.description as string) || meta.description, markdown, version, category: body.category as string, agents, license: body.license.trim(), tags: body.tags ?? [], changelog: body.changelog ?? 'Initial release' };
 }
+// Owner edits target display metadata of the latest private version; SKILL.md, ZIP and approved presentations stay immutable.
+export function validateMetadataUpdate(body: Record<string, unknown>) {
+  if (!['name','description','category','agents','tags','license'].some(field => body[field] !== undefined)) throw new ApiError(400,'invalid_input','至少提供一项要更新的资料');
+  if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 120)) throw new ApiError(400,'invalid_name','名称须为 1–120 字符');
+  if (body.description !== undefined && (typeof body.description !== 'string' || !body.description.trim() || body.description.length > 20000)) throw new ApiError(400,'invalid_description','描述须为 1–20000 字符');
+  if (body.category !== undefined && !CATEGORIES.includes(body.category as typeof CATEGORIES[number])) throw new ApiError(400,'invalid_category','请选择技能分类');
+  if (body.agents !== undefined && (!Array.isArray(body.agents) || !body.agents.length || body.agents.length > AGENTS.length)) throw new ApiError(400,'invalid_agents','至少声明一个适用 Agent');
+  if (body.tags !== undefined && (!Array.isArray(body.tags) || body.tags.length > 10 || body.tags.some(t => typeof t !== 'string' || t.length > 30))) throw new ApiError(400,'invalid_tags','最多 10 个标签，每个不超过 30 字符');
+  if (body.license !== undefined && (typeof body.license !== 'string' || !body.license.trim() || body.license.length > 80)) throw new ApiError(400,'invalid_license','请填写许可证');
+  const text = (value: unknown, fallback?: string) => typeof value === 'string' ? value.trim() : fallback;
+  return {
+    name: text(body.name), description: text(body.description), license: text(body.license),
+    category: body.category as string | undefined,
+    agents: body.agents !== undefined ? [...new Set(body.agents.map(validAgent))] : undefined,
+    tags: body.tags !== undefined ? (body.tags as string[]).map(t => t.trim()) : undefined,
+  };
+}
 export function compareVersion(a: string, b: string) {
   const aa = a.split('.').map(Number), bb = b.split('.').map(Number);
   return aa[0] - bb[0] || aa[1] - bb[1] || aa[2] - bb[2];

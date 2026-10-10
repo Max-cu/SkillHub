@@ -108,20 +108,36 @@ export default function SkillHub() {
       </main>
     </div>
     {toast&&<div className="toast" role="status"><Check size={16}/>{toast}</div>}
-    {selected&&<DetailModal isAdmin={meta?.user?.role==='admin'} notify={notify} skill={selected} onClose={()=>{setSelected(null);setReviewContext(null);}} favorite={()=>favorite(selected)} copy={copy} owned={!reviewContext&&selected.owner===meta?.user?.id} onChanged={refreshSelected} review={reviewContext} onReviewDone={()=>{setSelected(null);setReviewContext(null);reload();notify('审核已完成');}}/>}
+    {selected&&<DetailModal isAdmin={meta?.user?.role==='admin'} notify={notify} skill={selected} onClose={()=>{setSelected(null);setReviewContext(null);}} favorite={()=>favorite(selected)} copy={copy} owned={!reviewContext&&selected.owner===meta?.user?.id} onChanged={refreshSelected} onDeleted={()=>{setSelected(null);setReviewContext(null);reload();notify('技能已删除');}} review={reviewContext} onReviewDone={()=>{setSelected(null);setReviewContext(null);reload();notify('审核已完成');}}/>}
     {modal==='publish'&&<PublishModal onClose={()=>setModal(null)} notify={notify} onPublished={()=>{setModal(null);reload();setLibrary('mine');navigate('discover');}}/>}
   </div>;
 }
 
-function DetailModal({skill,onClose,favorite,copy,owned,onChanged,review,onReviewDone,isAdmin,notify}:{isAdmin:boolean;notify:(message:string)=>void;skill:Skill;onClose:()=>void;favorite:()=>void;copy:(text:string)=>void;owned:boolean;onChanged:()=>void;review:Review|null;onReviewDone:()=>void}) {
+function DetailModal({skill,onClose,favorite,copy,owned,onChanged,onDeleted,review,onReviewDone,isAdmin,notify}:{isAdmin:boolean;notify:(message:string)=>void;skill:Skill;onClose:()=>void;favorite:()=>void;copy:(text:string)=>void;owned:boolean;onChanged:()=>void;onDeleted:()=>void;review:Review|null;onReviewDone:()=>void}) {
   const [tab,setTab]=useState('readme'),[versions,setVersions]=useState<{version:string;digest:string;changelog:string;created_at:string;commit:string|null}[]>([]),[markdown,setMarkdown]=useState(skill.markdown),[version,setVersion]=useState(skill.version),[error,setError]=useState(''),[bundle,setBundle]=useState<PackageMetadata|null>(null);
+  const [editing,setEditing]=useState(false),[saving,setSaving]=useState(false),[metaError,setMetaError]=useState('');
+  const [editName,setEditName]=useState(skill.name),[editDescription,setEditDescription]=useState(skill.originalDescription),[editCategory,setEditCategory]=useState<Category>(skill.category),[editLicense,setEditLicense]=useState(skill.license),[editAgents,setEditAgents]=useState<Agent[]>(skill.agents),[editTags,setEditTags]=useState(skill.tags.join(', '));
+  const [confirmDelete,setConfirmDelete]=useState(false),[deleting,setDeleting]=useState(false);
+  useEffect(()=>{setEditing(false);setConfirmDelete(false);setMetaError('');setEditName(skill.name);setEditDescription(skill.originalDescription);setEditCategory(skill.category);setEditLicense(skill.license);setEditAgents(skill.agents);setEditTags(skill.tags.join(', '));},[skill.id,skill.version]);
   const resource=review?'admin/reviews/'+review.id:'skills/'+skill.id;
   useEffect(()=>{if(review){setVersions([]);return;}let live=true;api<typeof versions>('skills/'+skill.id+'/versions').then(v=>{if(live)setVersions(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[skill.id,review?.id]);
   useEffect(()=>{let live=true;setBundle(null);api<PackageMetadata>(resource+'/package?version='+version).then(v=>{if(live)setBundle(v);}).catch(e=>{if(live)setError(e.message);});return()=>{live=false;};},[resource,version]);
   const readVersion=async(v:string)=>{try{const r=await fetch('/api/v1/'+resource+'/file?version='+v);if(!r.ok){if(r.status===401)window.dispatchEvent(new Event('skillhub-session-expired'));throw new Error('无法加载版本');}setMarkdown(await r.text());setVersion(v);setTab('readme');}catch(e){setError((e as Error).message);}};
-  return <Modal title={skill.name} onClose={onClose} wide>
+  const saveMetadata=async(e:FormEvent)=>{e.preventDefault();if(saving)return;setSaving(true);setMetaError('');try{await api('skills/'+skill.id,{method:'PATCH',body:JSON.stringify({name:editName.trim(),description:editDescription.trim(),category:editCategory,license:editLicense.trim()||'Unspecified',agents:editAgents,tags:editTags.split(',').map(t=>t.trim()).filter(Boolean)})});setEditing(false);notify('展示资料已更新');onChanged();}catch(e){setMetaError((e as Error).message);}finally{setSaving(false);}};
+  const removeSkill=async()=>{if(deleting)return;setDeleting(true);try{await api('skills/'+skill.id,{method:'DELETE'});onDeleted();}catch(e){notify((e as Error).message);setDeleting(false);}};
+  return <Modal title={skill.name} onClose={onClose} wide dismissible={!deleting}>
     <div className="detail-summary"><SkillIcon skill={skill}/><div><p>{skill.description}</p><span>{categoryLabels[skill.category]} <span className="footer-dot">·</span> {skill.license} <span className="footer-dot">·</span> v{version}</span></div>{!review&&<button className={`icon-btn ${skill.favorite?'saved':''}`} onClick={favorite} aria-label="切换收藏"><Bookmark size={20} fill={skill.favorite?'currentColor':'none'}/></button>}</div>
-    <div className="detail-actions"><a className="primary-btn" href={`/api/v1/${resource}/download?version=${version}`}><ArrowDownToLine size={15}/>下载 ZIP</a>{bundle?.kind==='catalog-markdown'&&<span className="bundle-note">示例快照，仅含 SKILL.md</span>}</div>
+    <div className="detail-actions"><a className="primary-btn" href={`/api/v1/${resource}/download?version=${version}`}><ArrowDownToLine size={15}/>下载 ZIP</a>{bundle?.kind==='catalog-markdown'&&<span className="bundle-note">示例快照，仅含 SKILL.md</span>}{owned&&<div className="detail-owner-actions"><button className="text-btn" onClick={()=>setEditing(v=>!v)} disabled={deleting}>{editing?'取消编辑':'编辑资料'}</button><button className="text-btn danger-text" onClick={()=>setConfirmDelete(true)} disabled={deleting}>删除技能</button></div>}</div>
+    {editing&&owned&&<form className="metadata-edit" onSubmit={saveMetadata}>
+      <p className="edit-note">修改最新版本 v{skill.version} 的展示资料；SKILL.md、原包与版本号不变。修改描述、分类或标签会重置 AI 整理。</p>
+      <div className="form-grid"><label className="field">名称<input value={editName} onChange={e=>setEditName(e.target.value)} required maxLength={120} disabled={saving}/></label><label className="field">分类<select value={editCategory} onChange={e=>setEditCategory(e.target.value as Category)} disabled={saving}>{CATEGORIES.map(c=><option key={c} value={c}>{categoryLabels[c]}</option>)}</select></label></div>
+      <label className="field">描述<textarea value={editDescription} onChange={e=>setEditDescription(e.target.value)} required maxLength={20000} rows={3} disabled={saving}/></label>
+      <div className="form-grid"><label className="field">许可证<input value={editLicense} onChange={e=>setEditLicense(e.target.value)} maxLength={80} disabled={saving}/></label><label className="field">标签（英文逗号分隔）<input value={editTags} onChange={e=>setEditTags(e.target.value)} placeholder="最多 10 个标签" disabled={saving}/></label></div>
+      <fieldset className="agent-fieldset"><legend>声明适用的 Agent</legend>{AGENTS.map(a=><label key={a}><input type="checkbox" checked={editAgents.includes(a)} onChange={e=>setEditAgents(e.target.checked?[...editAgents,a]:editAgents.filter(x=>x!==a))} disabled={saving}/>{agentLabels[a]}</label>)}</fieldset>
+      {metaError&&<p className="form-error" role="alert">{metaError}</p>}
+      <div className="modal-footer"><button type="button" className="secondary-btn" onClick={()=>setEditing(false)} disabled={saving}>取消</button><button className="primary-btn" disabled={saving||!editAgents.length}>{saving&&<Loader2 size={15} className="spin"/>}{saving?'正在保存…':'保存资料'}</button></div>
+    </form>}
+    {confirmDelete&&owned&&!editing&&<div className="delete-confirm" role="alertdialog" aria-label="确认删除技能"><span>永久删除「{skill.name}」的全部版本、原包、审核与社区记录？此操作不可恢复。</span><div className="delete-confirm-actions"><button className="secondary-btn" onClick={()=>setConfirmDelete(false)} disabled={deleting}>取消</button><button className="primary-btn" disabled={deleting} onClick={removeSkill}>{deleting&&<Loader2 size={14} className="spin"/>}{deleting?'正在删除…':'确认删除'}</button></div></div>}
     {owned&&skill.importWarnings.length>0&&<p className="bundle-note">导入提示：{skill.importWarnings.join(" ")}</p>}
     <div className="detail-tabs"><button className={tab==='readme'?'active':''} onClick={()=>setTab('readme')}>SKILL.md</button><button className={tab==='files'?'active':''} onClick={()=>setTab('files')}>包内容</button>{!review&&<button className={tab==='versions'?'active':''} onClick={()=>setTab('versions')}>版本</button>}<button className={tab==='connect'?'active':''} onClick={()=>setTab('connect')}>API</button></div>
     <div className="detail-scroll">{error&&<p className="form-error">{error}</p>}
@@ -135,12 +151,31 @@ function DetailModal({skill,onClose,favorite,copy,owned,onChanged,review,onRevie
 
 function PublishModal({onClose,notify,onPublished}:{onClose:()=>void;notify:(s:string)=>void;onPublished:()=>void}) {
   const [file,setFile]=useState<File|null>(null),[version,setVersion]=useState(''),[category,setCategory]=useState<Category>('development'),[license,setLicense]=useState('Unspecified'),[agents,setAgents]=useState<Agent[]>([...AGENTS]),[tags,setTags]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [progress,setProgress]=useState<number|null>(null),[processing,setProcessing]=useState(false);
   const choose=(value:File|undefined)=>{setError('');if(!value)return;if(!value.name.toLowerCase().endsWith('.zip')||value.size>MAX_ZIP_BYTES){setFile(null);setError('请选择不超过 50 MB 的 .zip 技能包');return;}setFile(value);};
-  const submit=async(e:FormEvent)=>{e.preventDefault();if(!file)return;setBusy(true);setError('');try{const form=new FormData();form.append('file',file);if(version.trim())form.append('version',version.trim());form.append('category',category);form.append('license',license);form.append('agents',JSON.stringify(agents));form.append('tags',JSON.stringify(tags.split(',').map(v=>v.trim()).filter(Boolean)));const response=await fetch('/api/v1/skills',{method:'POST',body:form});const result=await response.json() as {error?:{message:string}};if(!response.ok){if(response.status===401)window.dispatchEvent(new Event('skillhub-session-expired'));throw new Error(result.error?.message??'上传失败');}notify('已保存到我的技能，AI 正在总结与分类');onPublished();}catch(e){setError((e as Error).message);}finally{setBusy(false);}};
+  const submit=async(e:FormEvent)=>{e.preventDefault();if(!file||busy)return;setBusy(true);setError('');setProgress(0);setProcessing(false);
+    try{
+      const form=new FormData();form.append('file',file);if(version.trim())form.append('version',version.trim());form.append('category',category);form.append('license',license);form.append('agents',JSON.stringify(agents));form.append('tags',JSON.stringify(tags.split(',').map(v=>v.trim()).filter(Boolean)));
+      // XHR upload gives real byte progress; fetch cannot report the outgoing request body.
+      const upload=new Promise<{status:number;body:{error?:{message:string}}}>((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.open('POST','/api/v1/skills');
+        xhr.upload.onprogress=ev=>{if(ev.lengthComputable)setProgress(Math.round(ev.loaded/ev.total*100));};
+        xhr.upload.onload=()=>setProcessing(true);
+        xhr.onerror=()=>reject(new Error('网络错误，上传中断'));
+        xhr.onload=()=>{let body={};try{body=JSON.parse(xhr.responseText);}catch{}resolve({status:xhr.status,body});};
+        xhr.send(form);
+      });
+      const response=await upload;
+      if(response.status===401)window.dispatchEvent(new Event('skillhub-session-expired'));
+      if(response.status<200||response.status>=300)throw new Error(response.body.error?.message??'上传失败');
+      notify('已保存到我的技能，AI 正在总结与分类');onPublished();
+    }catch(e){setError((e as Error).message);}finally{setBusy(false);setProgress(null);setProcessing(false);}};
   return <Modal title="上传技能" onClose={onClose} wide><form className="publish-form" onSubmit={submit}>
     <p className="publish-privacy">上传后仅自己可见，AI 会自动整理简介、分类与标签。需要分享时，点击技能卡片上的“发布到社区”，AI 审核通过后对其他用户可见。</p>
     <label className={`zip-upload ${file?'has-file':''}`} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();choose(e.dataTransfer.files[0]);}}><ArrowDownToLine size={26}/><strong>{file?file.name:'选择或拖入 ZIP 技能包'}</strong><span>{file? (file.size/1024).toFixed(1)+' KB':'包含 SKILL.md，可附带脚本、参考资料和资源文件。'}</span><small>最大 50 MB</small><input type="file" accept=".zip,application/zip" aria-label="选择 ZIP 技能包" onChange={e=>choose(e.target.files?.[0])}/></label>
     <div className="upload-guide"><span>支持多层目录和不同大小写的 SKILL.md，其他资源原样保留。</span><a className="text-btn" href="/api/v1/package-template">下载示例包 <ArrowDownToLine size={13}/></a></div>
+    {busy&&progress!==null&&<div className="upload-progress" role="status"><div className="upload-progress-bar"><span style={{width:(processing?100:progress)+'%'}}/></div><span className="upload-progress-label">{processing?'服务器正在校验并保存包…':'上传中 '+progress+'%'}</span></div>}
     <div className="form-grid"><label className="field">版本（选填）<input value={version} onChange={e=>setVersion(e.target.value)} placeholder="自动递增，或指定 x.y.z"/></label><label className="field">分类<select value={category} onChange={e=>setCategory(e.target.value as Category)}>{CATEGORIES.map(c=><option key={c} value={c}>{categoryLabels[c]}</option>)}</select></label></div>
     <details className="publish-options"><summary>更多发布信息</summary><label className="field">许可证<input value={license} onChange={e=>setLicense(e.target.value)} required maxLength={80}/></label><label className="field">标签<input value={tags} onChange={e=>setTags(e.target.value)} placeholder="以英文逗号分隔"/></label><fieldset className="agent-fieldset"><legend>声明适用的 Agent</legend>{AGENTS.map(a=><label key={a}><input type="checkbox" checked={agents.includes(a)} onChange={e=>setAgents(e.target.checked?[...agents,a]:agents.filter(x=>x!==a))}/>{agentLabels[a]}</label>)}</fieldset></details>
     {error&&<div className="form-error" role="alert">{error}</div>}<div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose}>取消</button><button className="primary-btn" disabled={busy||!file||!agents.length}>{busy&&<Loader2 size={15} className="spin"/>}{busy?'正在保存…':'保存到我的技能'}</button></div>
