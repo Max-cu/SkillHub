@@ -1,0 +1,40 @@
+name: skillhub-ui-qa
+services:
+  app:
+    image: skillhub:ui-candidate
+    init: true
+    environment:
+      NODE_ENV: test
+      SKILLHUB_AUTH_MODE: local
+      SKILLHUB_DATABASE_URL: postgresql://skillhub_app:${SKILLHUB_UI_QA_APP_PASSWORD:?Dedicated QA password required}@skillhub-postgres:5432/skillhub
+    depends_on:
+      skillhub-postgres: {condition: service_healthy}
+    ports:
+      # Loopback-only publish; reach it through an SSH tunnel for browser verification.
+      - "127.0.0.1:3357:3356"
+    networks: [ui-qa]
+    labels: {skillhub-purpose: ui-qa}
+  skillhub-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: skillhub
+      POSTGRES_USER: skillhub_admin
+      POSTGRES_PASSWORD: ${SKILLHUB_UI_QA_ADMIN_PASSWORD:?Dedicated QA password required}
+      SKILLHUB_APP_PASSWORD: ${SKILLHUB_UI_QA_APP_PASSWORD:?Dedicated QA password required}
+    volumes:
+      - ui-data:/var/lib/postgresql/data
+      - ../postgres/init:/docker-entrypoint-initdb.d:ro
+    networks: [ui-qa]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U skillhub_admin -d skillhub"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    labels: {skillhub-purpose: ui-qa}
+networks:
+  ui-qa:
+    internal: true
+    labels: {skillhub-purpose: ui-qa}
+volumes:
+  ui-data:
+    labels: {skillhub-purpose: ui-qa}
