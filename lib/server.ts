@@ -101,7 +101,7 @@ async function querySkills(userId:string,opts:SkillQueryOptions) {
   else conds.push('(s.owner=$1 OR s.community_version IS NOT NULL)');
   conds.push(`v.version=${chosen}`);
   if(opts.scope==='community')conds.push('$1::text IS NOT NULL');
-  if(opts.agent){conds.push(`v.metadata::json->'agents' @> $${values.push(JSON.stringify([opts.agent]))}::jsonb`);}
+  if(opts.agent){conds.push(`v.metadata::jsonb->'agents' @> $${values.push(JSON.stringify([opts.agent]))}::jsonb`);}
   if(opts.category){
     if(!CATEGORIES.includes(opts.category as typeof CATEGORIES[number]))throw new ApiError(400,'invalid_category','无效分类');
     conds.push(`(COALESCE(v.ai_category, CASE WHEN v.metadata::json->>'category'='auto' AND v.ai_status='error' THEN 'productivity' WHEN v.metadata::json->>'category'='auto' THEN NULL ELSE v.metadata::json->>'category' END, s.category)=$${values.push(opts.category)})`);
@@ -110,7 +110,7 @@ async function querySkills(userId:string,opts:SkillQueryOptions) {
   if(opts.q){
     const like='%'+opts.q.replace(/[\\%_]/g,m=>'\\'+m)+'%';
     const qi=values.push(like);
-    conds.push(`(LOWER(COALESCE(v.metadata::json->>'name',s.name)) LIKE LOWER($${qi}) OR LOWER(s.id) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_summary,v.metadata::json->>'description',s.description)) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_tags::text,v.metadata::json->'tags'::text)) LIKE LOWER($${qi}) OR LOWER(COALESCE(s.source,'')) LIKE LOWER($${qi}) OR EXISTS(SELECT 1 FROM versions vb WHERE vb.skill_id=s.id AND LOWER(vb.markdown) LIKE LOWER($${qi})))`);
+    conds.push(`(LOWER(COALESCE(v.metadata::json->>'name',s.name)) LIKE LOWER($${qi}) OR LOWER(s.id) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_summary,v.metadata::json->>'description',s.description)) LIKE LOWER($${qi}) OR LOWER(COALESCE(v.ai_tags,(v.metadata::json->'tags')::text)) LIKE LOWER($${qi}) OR LOWER(COALESCE(s.source,'')) LIKE LOWER($${qi}) OR EXISTS(SELECT 1 FROM versions vb WHERE vb.skill_id=s.id AND LOWER(vb.markdown) LIKE LOWER($${qi})))`);
   }
   const where=' WHERE '+conds.join(' AND ');
   const order=opts.sort==='newest'?'s.created_at DESC,s.name':opts.sort==='name'?'s.name':opts.sort==='compact'?'length(v.markdown) ASC,s.name':'s.featured DESC,s.name';
