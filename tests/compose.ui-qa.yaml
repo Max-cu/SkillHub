@@ -33,7 +33,7 @@ services:
     labels: {skillhub-purpose: ui-qa}
 networks:
   ui-qa:
-    internal: true
+    # Not internal: the app publishes one loopback-only port for SSH-tunnel browser checks.
     labels: {skillhub-purpose: ui-qa}
 volumes:
   ui-data:
