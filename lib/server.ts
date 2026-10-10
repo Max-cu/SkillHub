@@ -153,6 +153,8 @@ async function deleteSkill(skillId:string,owner:string) {
     await client.query('DELETE FROM community_reviews WHERE skill_id=$1',[skillId]);
     await client.query('DELETE FROM community_moderation WHERE skill_id=$1',[skillId]);
     await client.query('DELETE FROM favorites WHERE skill_id=$1',[skillId]);
+    // Clear the self-referencing community pointer before removing the versions it points to.
+    await client.query('UPDATE skills SET community_version=NULL WHERE id=$1',[skillId]);
     await client.query('DELETE FROM versions WHERE skill_id=$1',[skillId]);
     await client.query('DELETE FROM skills WHERE id=$1',[skillId]);
     await client.query('COMMIT');return {deleted:true};
