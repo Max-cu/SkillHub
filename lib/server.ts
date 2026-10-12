@@ -83,6 +83,34 @@ async function allSkills(userId:string,scope='mine') {
   ]);
   return rows.results.map(r => mapSkill(r, fav.results.map(f => f.skill_id),userId));
 }
+// Remove a single owner version that was never submitted for community review. The currently
+// published version, the last remaining version, and any version with audit records stay protected.
+async function deleteVersion(skillId:string, ownerId:string, version:string) {
+  if(!/^\d{1,6}\.\d{1,6}\.\d{1,6}$/.test(version))throw new ApiError(400,'invalid_version','版本号格式无效');
+  const client=await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const skill=await client.query('SELECT community_version FROM skills WHERE id=$1 AND owner=$2 FOR UPDATE',[skillId, ownerId]);
+    if(!skill.rows.length) throw new ApiError(404,'skill_not_found','技能不存在');
+    if(skill.rows[0].community_version===version) throw new ApiError(409,'version_protected','当前社区版本不能删除，请先撤回社区或删除整个技能');
+    const exists=await client.query('SELECT 1 FROM versions WHERE skill_id=$1 AND version=$2 FOR UPDATE',[skillId, version]);
+    if(!exists.rows.length) throw new ApiError(404,'version_not_found','该版本不存在');
+    const reviewed=await client.query('SELECT 1 FROM community_reviews WHERE skill_id=$1 AND version=$2 LIMIT 1',[skillId, version]);
+    if(reviewed.rows.length) throw new ApiError(409,'version_protected','该版本有审核记录，不能单独删除');
+    const count=await client.query('SELECT count(*)::integer AS n FROM versions WHERE skill_id=$1',[skillId]);
+    if((count.rows[0].n as number)<=1) throw new ApiError(409,'version_last','这是唯一版本，请直接删除整个技能');
+    // Remove queued AI work first, then package bytes/metadata in foreign-key order.
+    await client.query('DELETE FROM package_chunks WHERE skill_id=$1 AND version=$2',[skillId, version]);
+    await client.query('DELETE FROM packages WHERE skill_id=$1 AND version=$2',[skillId, version]);
+    await client.query('DELETE FROM ai_jobs WHERE skill_id=$1 AND version=$2',[skillId, version]);
+    await client.query('DELETE FROM versions WHERE skill_id=$1 AND version=$2',[skillId, version]);
+    await client.query('COMMIT');
+    return {deletedVersion: version};
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally { client.release(); }
+}
 async function getSkill(id:string,userId:string,version?:string) {
   const row=await db().prepare(skillQuery+` WHERE s.id=$1 AND (s.owner=$2 OR (s.community_version IS NOT NULL AND ${approvedVersion})) AND v.version=COALESCE($3,CASE WHEN s.owner=$2 THEN ${newestVersion} ELSE s.community_version END)`).bind(id,userId,version??null).first<Record<string,unknown>>();
   if(!row)throw new ApiError(404,'skill_not_found','技能或可访问版本不存在');
@@ -230,6 +258,8 @@ async function skillArtifact(skill:Skill,action:string) {
     bytes=new Uint8Array(info.size);let at=0;for(const chunk of chunks.results){const content=new Uint8Array(chunk.content);bytes.set(content,at);at+=content.length;}
     if(at!==info.size||await digest(bytes)!==info.digest)throw new ApiError(500,'package_corrupt','技能包存储校验失败');
   }else bytes=markdownPackage(skill.markdown);
+  // Count actual package downloads (not inline markdown views).
+  await db().prepare('UPDATE versions SET downloads_count=downloads_count+1 WHERE skill_id=$1 AND version=$2').bind(skill.id,skill.version).run();
   return zipResponse(bytes,skill.slug+'-'+skill.version+'.zip',info.digest);
 }
 export async function handle(request: Request) {
@@ -258,7 +288,7 @@ export async function handle(request: Request) {
     if (method === 'GET' && path[0] === 'openapi.json') return Response.json(openapi, { headers: { 'Cache-Control': 'public, max-age=300' } });
     if (method === 'GET' && path[0] === 'health') {
       try { await assertDatabase(); } catch { throw new ApiError(503,'database_unavailable','SkillHub PostgreSQL 暂不可用'); }
-      return json({ status: 'ok', version: '0.7.4', database: 'PostgreSQL' });
+      return json({ status: 'ok', version: '0.8.0', database: 'PostgreSQL' });
     }
     const authResponse=await handleAuth(request,path,body);if(authResponse)return authResponse;
     // The entire registry and board require a CAS session or a user-owned API key.
@@ -373,7 +403,11 @@ export async function handle(request: Request) {
       if (method === 'DELETE' && path.length === 2) { const writer=(await identity(request,true,true))!; return json(await deleteSkill(id,writer.userId)); }
       if (method === 'PATCH' && path.length === 2) { const writer=(await identity(request,true,true))!; return json(await updateSkillMetadata(id,writer.userId,await body(request))); }
       if (method === 'GET' && path.length === 2) return json(await getSkill(id,user.userId,url.searchParams.get('version')??undefined));
-      if (method === 'GET' && path[2] === 'versions') { const skill=await getSkill(id,user.userId);const result=await db().prepare('SELECT v.version,v.digest,v.changelog,v.created_at,v."commit" FROM versions v JOIN skills s ON s.id=v.skill_id WHERE s.id=$1'+(skill.owner===user.userId?'':` AND ${approvedVersion}`)).bind(id).all<{version:string}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
+      if (method === 'GET' && path[2] === 'versions') { const skill=await getSkill(id,user.userId);const result=await db().prepare('SELECT v.version,v.digest,v.changelog,v.created_at,v."commit",v.downloads_count FROM versions v JOIN skills s ON s.id=v.skill_id WHERE s.id=$1'+(skill.owner===user.userId?'':` AND ${approvedVersion}`)).bind(id).all<{version:string;downloads_count:number}>(); return json(result.results.sort((a,b) => compareVersion(b.version,a.version))); }
+      if (method === 'DELETE' && path[2] === 'versions' && path[3]) {
+        const writer=(await identity(request,true,true))!;
+        return json(await deleteVersion(id, writer.userId, path[3]));
+      }
       if (method==='GET' && path.length===3 && ['file','download','package'].includes(path[2])) {
         return skillArtifact(await getSkill(id,user.userId,url.searchParams.get('version')??undefined),path[2]);
       }

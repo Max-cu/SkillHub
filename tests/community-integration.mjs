@@ -126,6 +126,35 @@ try {
  const p6=await submit('4.0.0');check(p6.status,201);check((await decide(p6.data.id,'approve')).status,200);
  check((await req('skills/'+id,{user:b})).data.version,'4.0.0');
  check((await req('skills/'+id,{user:a,method:'PATCH',body:{description:'post-approval edit'}})).status,409);
+ // DELETE one version: owner-only; community version, reviewed versions, the last version and unknown/invalid versions are protected.
+ const delSlug='version-delete-'+randomUUID().slice(0,8);
+ const d1=bundle(delSlug,'1.0.0'),d2=bundle(delSlug,'2.0.0'),d3=bundle(delSlug,'3.0.0');
+ const dup=await req('skills',{user:a,method:'POST',body:d1.form});check(dup.status,201);const did=dup.data.id;
+ check((await req('skills',{user:a,method:'POST',body:d2.form})).status,201);
+ check((await req('skills',{user:a,method:'POST',body:d3.form})).status,201);
+ check((await req('skills/'+did+'/versions/2.0.0',{user:b,method:'DELETE'})).status,404);
+ check((await req('skills/'+did+'/versions/2.0.0',{headers:readA,method:'DELETE'})).status,403);
+ check((await req('skills/'+did+'/versions/not-a-version',{user:a,method:'DELETE'})).status,400);
+ check((await req('skills/'+did+'/versions/9.9.9',{user:a,method:'DELETE'})).status,404);
+ // Download counters move only on real ZIP downloads, not on SKILL.md views or package metadata.
+ check((await req('skills/'+did+'/versions',{user:a})).data.find(v=>v.version==='2.0.0').downloads_count,0);
+ check((await req('skills/'+did+'/file?version=2.0.0',{user:a})).status,200);
+ check((await req('skills/'+did+'/package?version=2.0.0',{user:a})).status,200);
+ check((await req('skills/'+did+'/versions',{user:a})).data.find(v=>v.version==='2.0.0').downloads_count,0);
+ check(Buffer.from(await (await req('skills/'+did+'/download?version=2.0.0',{user:a})).response.arrayBuffer()),Buffer.from(d2.bytes));
+ check((await req('skills/'+did+'/versions',{user:a})).data.find(v=>v.version==='2.0.0').downloads_count,1);
+ check((await req('skills/'+did+'/versions/2.0.0',{user:a,method:'DELETE'})).status,200);
+ check((await req('skills/'+did+'/versions',{user:a})).data.map(v=>v.version),['3.0.0','1.0.0']);
+ check((await req('skills/'+did+'/file?version=2.0.0',{user:a})).status,404);
+ for(const table of ['versions','packages','package_chunks','ai_jobs'])check((await pool.query("SELECT count(*)::integer AS n FROM "+table+" WHERE skill_id=$1 AND version='2.0.0'",[did])).rows[0].n,0);
+ check((await req('skills/'+did+'/versions/1.0.0',{user:a,method:'DELETE'})).status,200);
+ check((await req('skills/'+did+'/versions/3.0.0',{user:a,method:'DELETE'})).status,409);
+ const dr3=await req('skills/'+did+'/community',{user:a,method:'POST',body:{version:'3.0.0'}});check(dr3.status,201);
+ check((await req('skills/'+did+'/versions/3.0.0',{user:a,method:'DELETE'})).status,409);
+ check((await req('skills/'+did+'/community',{user:a,method:'DELETE'})).status,200);
+ // A withdrawn review record still keeps the version auditable and therefore protected.
+ check((await req('skills/'+did+'/versions/3.0.0',{user:a,method:'DELETE'})).status,409);
+ check((await req('skills/'+did,{user:a,method:'DELETE'})).status,200);
  // DELETE: hard-removes the owner's whole skill; non-owners and admins get 404, read keys 403.
  check((await req('skills/'+id,{user:b,method:'DELETE'})).status,404);
  check((await req('skills/'+id,{headers:readA,method:'DELETE'})).status,403);
@@ -153,5 +182,5 @@ try {
  const before=(await pool.query('SELECT role FROM auth_users WHERE id=$1',[b.id])).rows[0].role;
  check((await req('admin/users',{user:b,method:'POST',body:{role:'admin',id:b.id}})).status,403);
  check((await pool.query('SELECT role FROM auth_users WHERE id=$1',[b.id])).rows[0].role,before);
- console.log(`COMMUNITY_INTEGRATION_PASS ${checks} checks; three simulated accounts; private artifacts, frozen review, metadata edits, skill deletion, role revocation and note deletion verified.`);
+ console.log(`COMMUNITY_INTEGRATION_PASS ${checks} checks; three simulated accounts; private artifacts, frozen review, metadata edits, per-version deletion/download counts, skill deletion, role revocation and note deletion verified.`);
 }finally{await pool.end();}

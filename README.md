@@ -95,7 +95,8 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | GET / POST | `/skills` | 搜索、过滤、分页 / ZIP 发布与新版本 |
 | GET | `/skills/{id}` | 最新版本详情及 SKILL.md |
 | PATCH / DELETE | `/skills/{id}` | 所有者编辑私有最新版展示资料 / 永久删除整个技能 |
-| GET | `/skills/{id}/versions` | 不可变版本记录 |
+| GET | `/skills/{id}/versions` | 不可变版本记录与每版本下载量 |
+| DELETE | `/skills/{id}/versions/{version}` | 所有者删除单个私有版本（受保护版本返回 409） |
 | GET | `/skills/{id}/file?version=` | 指定版本 SKILL.md |
 | GET | `/skills/{id}/package?version=` | 包大小、文件清单、摘要及 kind |
 | GET | `/skills/{id}/download?version=` | 指定版本完整原包 |
@@ -126,6 +127,10 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 **编辑展示资料**：`PATCH /skills/{id}` 允许所有者修改自己技能最新版本的名称、描述、分类、Agent、标签和许可证，不必重新上传 ZIP；SKILL.md、原包字节与版本号保持不变。当前版本已通过社区审核、曾有通过记录，或正在待审核时返回 409——已通过的展示内容保持冻结，请上传新版本；待审核版本需先撤回。修改描述、分类或标签会重置该版本的 AI 整理结果（显示回到你填写的内容），之后可再次触发 AI 整理。
 
 **删除技能**：`DELETE /skills/{id}` 允许所有者永久删除自己的整个技能：全部版本、原始 ZIP 分块、审核记录、管理记录与其他用户的收藏一并移除，社区可见性随之消失，操作不可恢复。非所有者（包括管理员）访问返回 404，管理员下架社区内容请继续使用专门的管理接口。
+
+**删除单个版本**：`DELETE /skills/{id}/versions/{version}` 允许所有者删除从未提交审核的单个私有版本，连同其原始 ZIP 分块、包记录和排队中的 AI 任务一并移除。以下版本受保护并返回 409：当前社区版本、技能的最后一个剩余版本（请改用删除整个技能）、任何存在审核记录（含已驳回或已撤回）的版本。非所有者返回 404，只读 Key 返回 403，版本号格式非法返回 400。
+
+**下载量**：`GET /skills/{id}/versions` 每项返回 `downloads_count`，只统计认证后的完整 ZIP 下载；在线查看 SKILL.md 和读取包元数据不计数。
 
 ```bash
 # 所有者提交某个版本；省略 version 默认私有最新版
@@ -353,6 +358,17 @@ docker compose exec -T skillhub-postgres \
 ```
 
 备份包含会话、Key 摘要、留言和上传原包，请妥善保存。恢复前先停止 SkillHub 网页服务，使用该专用 PG 容器中的 `pg_restore` 恢复到 SkillHub 数据库。不要执行 `docker compose down -v`，它会删除 PG 数据卷。首次初始化后的账号密码已经存入 PG，修改 `.env` 不会自动完成密码轮换。
+
+服务器可安装每日自动备份（仅备份 SkillHub 专用 PG 容器，不接触 SkillGo）：
+
+```bash
+install -m 0700 scripts/backup-pg.sh /opt/skillhub/scripts/backup-pg.sh
+/opt/skillhub/scripts/backup-pg.sh          # 先手动执行一次验证
+# crontab -e  每天 03:17 执行，默认保留 14 天
+17 3 * * * /opt/skillhub/scripts/backup-pg.sh >> /opt/skillhub/backups/auto/cron.log 2>&1
+```
+
+脚本校验容器存在、转储非空且具备自定义格式魔数后才会落盘，结果写入 `backups/auto/backup.log`；可用 `SKILLHUB_BACKUP_DIR`、`SKILLHUB_BACKUP_RETENTION_DAYS`、`SKILLHUB_PG_CONTAINER` 覆盖默认值。
 
 网络受限时可设置 `NODE_IMAGE / NPM_REGISTRY / SKILLHUB_PG_IMAGE` 镜像源，保持 TLS 和包锁完整性校验。Vinext 当前仍为 beta；数据库驱动为 node-postgres，使用真实 PG 连接池及事务。
 

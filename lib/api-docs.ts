@@ -6,7 +6,7 @@ const groups = ['技能', '社区审核', '留言', '密钥', '认证', '系统'
 const titles: Record<string, string> = {
   'GET /skills':'搜索技能', 'POST /skills':'发布 ZIP / 新版本', 'GET /skills/{id}':'技能详情',
   'PATCH /skills/{id}':'编辑展示资料', 'DELETE /skills/{id}':'删除技能',
-  'GET /skills/{id}/versions':'版本记录', 'GET /skills/{id}/file':'读取 SKILL.md',
+  'GET /skills/{id}/versions':'版本记录与下载量', 'DELETE /skills/{id}/versions/{version}':'删除单个私有版本', 'GET /skills/{id}/file':'读取 SKILL.md',
   'GET /skills/{id}/package':'包内容与摘要', 'GET /skills/{id}/download':'下载原始 ZIP',
   'PUT /skills/{id}/favorite':'加入收藏', 'DELETE /skills/{id}/favorite':'取消收藏',
   'GET /package-template':'下载示例包', 'GET /messages':'留言列表', 'POST /messages':'发布便利贴',
