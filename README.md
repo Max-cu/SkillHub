@@ -359,16 +359,27 @@ docker compose exec -T skillhub-postgres \
 
 备份包含会话、Key 摘要、留言和上传原包，请妥善保存。恢复前先停止 SkillHub 网页服务，使用该专用 PG 容器中的 `pg_restore` 恢复到 SkillHub 数据库。不要执行 `docker compose down -v`，它会删除 PG 数据卷。首次初始化后的账号密码已经存入 PG，修改 `.env` 不会自动完成密码轮换。
 
-服务器可安装每日自动备份（仅备份 SkillHub 专用 PG 容器，不接触 SkillGo）：
+服务器可安装每日自动备份（仅备份 SkillHub 专用 PG 容器，不接触 SkillGo）。仓库提供 `scripts/backup-pg.sh`，在无法安装 cron 包的服务器上使用原生 systemd timer：
 
 ```bash
-install -m 0700 scripts/backup-pg.sh /opt/skillhub/scripts/backup-pg.sh
+chmod 0755 /opt/skillhub/scripts/backup-pg.sh
 /opt/skillhub/scripts/backup-pg.sh          # 先手动执行一次验证
-# crontab -e  每天 03:17 执行，默认保留 14 天
-17 3 * * * /opt/skillhub/scripts/backup-pg.sh >> /opt/skillhub/backups/auto/cron.log 2>&1
+# /etc/systemd/system/skillhub-backup.service
+[Service]
+Type=oneshot
+ExecStart=/opt/skillhub/scripts/backup-pg.sh
+# /etc/systemd/system/skillhub-backup.timer
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+[Install]
+WantedBy=timers.target
+# 然后 systemctl daemon-reload && systemctl enable --now skillhub-backup.timer
 ```
 
-脚本校验容器存在、转储非空且具备自定义格式魔数后才会落盘，结果写入 `backups/auto/backup.log`；可用 `SKILLHUB_BACKUP_DIR`、`SKILLHUB_BACKUP_RETENTION_DAYS`、`SKILLHUB_PG_CONTAINER` 覆盖默认值。
+有 cron 的主机也可改用 crontab：`17 3 * * * /opt/skillhub/scripts/backup-pg.sh >> /opt/skillhub/backups/auto/cron.log 2>&1`。
+
+脚本校验容器存在、转储非空且具备自定义格式魔数后才会落盘，结果写入 `backups/auto/backup.log`，默认保留 14 天；可用 `SKILLHUB_BACKUP_DIR`、`SKILLHUB_BACKUP_RETENTION_DAYS`、`SKILLHUB_PG_CONTAINER` 覆盖默认值。
 
 网络受限时可设置 `NODE_IMAGE / NPM_REGISTRY / SKILLHUB_PG_IMAGE` 镜像源，保持 TLS 和包锁完整性校验。Vinext 当前仍为 beta；数据库驱动为 node-postgres，使用真实 PG 连接池及事务。
 
