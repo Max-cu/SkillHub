@@ -30,8 +30,9 @@ out="$BACKUP_DIR/skillhub-$stamp.dump"
 tmp="$out.tmp"
 trap 'rm -f "$tmp"' EXIT
 
-# Custom format via stdin redirect; -T keeps docker exec quiet for cron.
-if "$DOCKER_BIN" exec -T "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" -Fc > "$tmp"; then
+# Custom format via stdout redirect. No -t (a TTY would corrupt the stream);
+# modern Docker (29+) also removed the -T shorthand, so no exec flag is used.
+if "$DOCKER_BIN" exec "$PG_CONTAINER" pg_dump -U "$PG_USER" -d "$PG_DB" -Fc > "$tmp"; then
   size=$(stat -c '%s' "$tmp")
   if [ "$size" -lt 1024 ]; then
     echo "[$ts] backup FAILED: dump too small ($size bytes)" | tee -a "$LOG"
