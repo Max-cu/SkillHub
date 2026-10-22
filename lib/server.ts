@@ -2,7 +2,8 @@ import { getDb, type PgStatement } from '../db/index';
 import { assertDatabase, getPool } from '../db/postgres.mjs';
 import catalog from './catalog.json';
 import { ApiError, compareVersion, digest, permissions, validAgent, validatePublish, validateMetadataUpdate } from './domain';
-import { agentPagination, agentReceipt, authorizeAgentSkillWrites, defaultAgentSlug, mapAgent, mergeAgentConfig, omitAgentSkills, resolveSkillSnapshots, validateAgentCreate, validateAgentPatch, validateInvoke, type AgentRow, type ReadableSkillVersion, type SkillAccess } from './agents';
+import { agentPagination, authorizeAgentSkillWrites, defaultAgentSlug, mapAgent, mergeAgentConfig, omitAgentSkills, resolveSkillSnapshots, validateAgentCreate, validateAgentPatch, validateInvoke, type AgentRow, type ReadableSkillVersion, type SkillAccess } from './agents';
+import { performAgentInvoke } from './agents-invoke';
 import { AGENT_SKILL_ID, AGENTS, CATEGORIES, type Skill } from './types';
 import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
@@ -505,8 +506,9 @@ export async function handle(request: Request) {
       if (method === 'POST' && path.length === 3 && path[2] === 'invoke') {
         const writer = (await identity(request, true, true))!;
         const agent = await ownedAgent(path[1], writer.userId);
+        const invoke = validateInvoke(await body(request));
         const skillsResolved = await resolveSkillSnapshots(writer.userId, agent.config.skills, skillAccess);
-        return json(agentReceipt(agent, validateInvoke(await body(request)), undefined, undefined, skillsResolved));
+        return json(await performAgentInvoke(agent, invoke, skillsResolved));
       }
       throw new ApiError(404, 'route_not_found', '接口不存在');
     }

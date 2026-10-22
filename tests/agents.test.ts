@@ -211,8 +211,11 @@ test('invoke stays an acceptance receipt and does not call the network', async (
 
 test('openapi lists owner-private agent routes separately from skill agent tags', () => {
   for (const path of ['/agents', '/agents/{id}', '/agents/{id}/invoke']) assert.ok(openapi.paths[path as keyof typeof openapi.paths], path);
-  assert.equal(openapi.paths['/agents/{id}/invoke'].post.summary.includes('No harness'), true);
-  assert.equal(openapi.paths['/agents/{id}/invoke'].post.summary.includes('upstream HTTP'), true);
+  const summary = openapi.paths['/agents/{id}/invoke'].post.summary;
+  assert.equal(summary.includes('No harness or MCP'), true);
+  assert.equal(summary.includes('AGENTHUB_UPSTREAM_ALLOWLIST'), true);
+  assert.equal(summary.includes('completed'), true);
+  assert.equal(summary.includes('AGENTHUB_INVOKE_PROXY=0'), true);
   const configSkills = (operation: { requestBody?: { content: { 'application/json': { schema: { properties: Record<string, unknown> } } } } }) => ((operation.requestBody!.content['application/json'].schema.properties.config as { properties: { skills: { maxItems: number; items: { properties: { skillId: { pattern: string } } } } } }).properties.skills);
   const postSkills = configSkills(openapi.paths['/agents'].post);
   const patchSkills = configSkills(openapi.paths['/agents/{id}'].patch);

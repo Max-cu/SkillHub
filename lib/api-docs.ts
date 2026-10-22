@@ -11,7 +11,7 @@ const titles: Record<string, string> = {
   'PUT /skills/{id}/favorite':'加入收藏', 'DELETE /skills/{id}/favorite':'取消收藏',
   'GET /package-template':'下载示例包', 'GET /agents':'我的 Agent', 'POST /agents':'新建 Agent',
   'GET /agents/{id}':'Agent 详情', 'PATCH /agents/{id}':'更新 Agent', 'DELETE /agents/{id}':'删除 Agent',
-  'POST /agents/{id}/invoke':'调用回执', 'GET /messages':'留言列表', 'POST /messages':'发布便利贴',
+  'POST /agents/{id}/invoke':'调用 Agent', 'GET /messages':'留言列表', 'POST /messages':'发布便利贴',
   'GET /messages/{id}':'留言全文', 'GET /keys':'密钥列表', 'POST /keys':'创建密钥',
   'DELETE /keys/{id}':'撤销密钥', 'GET /health':'健康检查', 'GET /meta':'工作区信息',
   'GET /openapi.json':'OpenAPI 规范',
@@ -29,7 +29,7 @@ const descriptions: Record<string, string> = {
   color:'便签颜色。', position:'白板中的相对位置，省略时自动排布；填写时 x 和 y 均需提供。',
   'position.x':'横向位置，0 为左侧，1 为右侧。', 'position.y':'纵向位置，0 为上方，1 为下方。',
   name:'名称。',decision:'approve 通过；reject 驳回。只有管理员可处理待审核版本。',reason:'审核说明，最多 1000 字符。',status:'状态。审核列表为 pending / approved / rejected / withdrawn / all；Agent 为 draft / published。',scope:'read / write 为 Key 权限；mine / community / all 为技能库范围；Agent 列表目前仅为 mine。',
-  slug:'所有者范围内唯一的小写标识。留空时按名称生成。技能引用里的 slug 只在写入时解析成 skillId，不会作为引用保存。',persona:'Agent 的系统提示，只保存，不在本接口执行。',tools:'工具范围标签，最多 20 项。',upstreamUrl:'可选的 http(s) 地址，只保存，本接口不会请求它。',input:'调用输入，原样写入回执。',context:'可选 JSON，原样写入回执。',config:'人设、工具范围、挂载技能和可选上游地址。',skills:'挂载技能，最多 20 个。保存 skillId，可选精确版本。', 'config.skills':'当前账号可读的技能引用，最多 20 个。同一 skillId 以后写版本为准。', 'config.persona':'Agent 的系统提示，只保存，不在本接口执行。', 'config.tools':'工具范围标签，最多 20 项。', 'config.upstreamUrl':'可选的 http(s) 地址，只保存，本接口不会请求它。', skillId:'技能 ID，形如 sk- 加 36 位标识。',
+  slug:'所有者范围内唯一的小写标识。留空时按名称生成。技能引用里的 slug 只在写入时解析成 skillId，不会作为引用保存。',persona:'Agent 的系统提示，只保存，不在本接口执行。',tools:'工具范围标签，最多 20 项。',upstreamUrl:'可选的 http(s) 地址。调用时仅在 AGENTHUB_UPSTREAM_ALLOWLIST 通过 SSRF 检查后由服务端转发；名单为空或 AGENTHUB_INVOKE_PROXY=0 时不外呼。',input:'调用输入，写入回执，并在转发时交给上游。',context:'可选 JSON，写入回执，并在转发时交给上游。',config:'人设、工具范围、挂载技能和可选上游地址。',skills:'挂载技能，最多 20 个。保存 skillId，可选精确版本。', 'config.skills':'当前账号可读的技能引用，最多 20 个。同一 skillId 以后写版本为准。', 'config.persona':'Agent 的系统提示。SkillHub 不在本地执行；转发时交给上游。', 'config.tools':'工具范围标签，最多 20 项。', 'config.upstreamUrl':'可选的 http(s) 地址。调用时仅在 AGENTHUB_UPSTREAM_ALLOWLIST 通过 SSRF 检查后由服务端转发；名单为空或 AGENTHUB_INVOKE_PROXY=0 时不外呼。', skillId:'技能 ID，形如 sk- 加 36 位标识。',
   service:'精确登记的登录回调，协议、主机、端口及结尾 / 均须一致。',ticket:'CAS 一次性 ST 票据，不写入日志或浏览器存储。',
 };
 export const docOperations = Object.entries(openapi.paths).flatMap(([path, methods]) =>
