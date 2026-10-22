@@ -2,6 +2,7 @@ import { getDb, type PgStatement } from '../db/index';
 import { assertDatabase, getPool } from '../db/postgres.mjs';
 import catalog from './catalog.json';
 import { ApiError, compareVersion, digest, permissions, validAgent, validatePublish, validateMetadataUpdate } from './domain';
+import { agentPagination, agentReceipt, defaultAgentSlug, mapAgent, mergeAgentConfig, validateAgentCreate, validateAgentPatch, validateInvoke, type AgentRow } from './agents';
 import { AGENTS, CATEGORIES, type Skill } from './types';
 import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
@@ -262,6 +263,50 @@ async function skillArtifact(skill:Skill,action:string) {
   await db().prepare('UPDATE versions SET downloads_count=downloads_count+1 WHERE skill_id=$1 AND version=$2').bind(skill.id,skill.version).run();
   return zipResponse(bytes,skill.slug+'-'+skill.version+'.zip',info.digest);
 }
+const agentReturning = `id,slug,name,description,owner,config,status,created_at AS "createdAt",updated_at AS "updatedAt"`;
+function searchLike(value: string) { return '%'+value.replace(/[\\%_]/g, match => '\\'+match)+'%'; }
+async function listAgents(owner: string, q: string, offset: number, limit: number) {
+  if (q.length > 200) throw new ApiError(400, 'invalid_query', '搜索最多 200 字符');
+  const values: unknown[] = [owner];
+  let where = 'WHERE owner=$1';
+  if (q) { values.push(searchLike(q)); where += ` AND (name ILIKE $${values.length} OR slug ILIKE $${values.length} OR description ILIKE $${values.length})`; }
+  const total = await db().prepare(`SELECT count(*)::integer AS n FROM agents ${where}`).bind(...values).first<{n:number}>();
+  const rows = await db().prepare(`SELECT ${agentReturning} FROM agents ${where} ORDER BY updated_at DESC, id DESC LIMIT $${values.length+1} OFFSET $${values.length+2}`).bind(...values, limit, offset).all<AgentRow>();
+  const count = total?.n ?? 0;
+  return { items: rows.results.map(mapAgent), total: count, offset, limit, nextOffset: offset + limit < count ? offset + limit : null };
+}
+async function ownedAgent(id: string, owner: string) {
+  const row = await db().prepare(`SELECT ${agentReturning} FROM agents WHERE id=$1 AND owner=$2`).bind(id, owner).first<AgentRow>();
+  if (!row) throw new ApiError(404, 'agent_not_found', 'Agent 不存在');
+  return mapAgent(row);
+}
+async function createAgent(owner: string, input: Record<string, unknown>) {
+  const value = validateAgentCreate(input), time = now(), slug = value.slug ?? defaultAgentSlug(value.name), id = 'ag-'+crypto.randomUUID();
+  try {
+    const row = await db().prepare(`INSERT INTO agents (id,slug,name,description,owner,config,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${agentReturning}`).bind(id, slug, value.name, value.description, owner, JSON.stringify(value.config), value.status, time, time).first<AgentRow>();
+    if (!row) throw new ApiError(500, 'invalid_agent', 'Agent 未能保存');
+    return mapAgent(row);
+  } catch (error) {
+    if ((error as {code?:string}).code === '23505') throw new ApiError(409, 'agent_exists', '你已有相同 slug 的 Agent');
+    throw error;
+  }
+}
+async function updateAgent(id: string, owner: string, input: Record<string, unknown>) {
+  const current = await ownedAgent(id, owner), patch = validateAgentPatch(input), time = now();
+  try {
+    const row = await db().prepare(`UPDATE agents SET slug=$1,name=$2,description=$3,config=$4,status=$5,updated_at=$6 WHERE id=$7 AND owner=$8 RETURNING ${agentReturning}`).bind(patch.slug ?? current.slug, patch.name ?? current.name, patch.description ?? current.description, JSON.stringify(mergeAgentConfig(current.config, patch.config)), patch.status ?? current.status, time, id, owner).first<AgentRow>();
+    if (!row) throw new ApiError(404, 'agent_not_found', 'Agent 不存在');
+    return mapAgent(row);
+  } catch (error) {
+    if ((error as {code?:string}).code === '23505') throw new ApiError(409, 'agent_exists', '你已有相同 slug 的 Agent');
+    throw error;
+  }
+}
+async function deleteAgent(id: string, owner: string) {
+  const result = await db().prepare('DELETE FROM agents WHERE id=$1 AND owner=$2').bind(id, owner).run();
+  if (!result.meta.changes) throw new ApiError(404, 'agent_not_found', 'Agent 不存在');
+  return { deleted: true };
+}
 export async function handle(request: Request) {
   try {
     // Large ZIP uploads must authenticate before their bodies are buffered.
@@ -417,6 +462,29 @@ export async function handle(request: Request) {
         else await db().prepare('DELETE FROM favorites WHERE user_id=$1 AND skill_id=$2').bind(writer!.userId,id).run();
         return json({ skillId:id, favorite:method==='PUT' });
       }
+    }
+    if (path[0] === 'agents') {
+      if (method === 'GET' && path.length === 1) {
+        const scope = url.searchParams.get('scope') ?? 'mine';
+        if (scope !== 'mine') throw new ApiError(400, 'invalid_scope', 'scope 目前仅为 mine');
+        const q = (url.searchParams.get('q') ?? '').trim();
+        const { offset, limit } = agentPagination(url.searchParams);
+        return json(await listAgents(currentUser.userId, q, offset, limit));
+      }
+      if (method === 'POST' && path.length === 1) {
+        const writer = (await identity(request, true, true))!;
+        return json(await createAgent(writer.userId, await body(request)), 201);
+      }
+      if (path.length === 2 && path[1]) {
+        if (method === 'GET') return json(await ownedAgent(path[1], currentUser.userId));
+        if (method === 'PATCH') { const writer = (await identity(request, true, true))!; return json(await updateAgent(path[1], writer.userId, await body(request))); }
+        if (method === 'DELETE') { const writer = (await identity(request, true, true))!; return json(await deleteAgent(path[1], writer.userId)); }
+      }
+      if (method === 'POST' && path.length === 3 && path[2] === 'invoke') {
+        const writer = (await identity(request, true, true))!;
+        return json(agentReceipt(await ownedAgent(path[1], writer.userId), validateInvoke(await body(request))));
+      }
+      throw new ApiError(404, 'route_not_found', '接口不存在');
     }
     if (path[0] === 'keys') {
       const user = await identity(request,true,method!=='GET');

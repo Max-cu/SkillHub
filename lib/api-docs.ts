@@ -2,14 +2,16 @@ import { openapi } from './openapi';
 
 type Schema = { type?: string; format?: string; description?: string; default?: unknown; enum?: string[]; minimum?: number; maximum?: number; minLength?: number; maxLength?: number; required?: string[]; properties?: Record<string, Schema> };
 type Operation = { parameters?: {name:string;in:string;required?:boolean;schema:Schema}[]; requestBody?: {content:Record<string,{schema:Schema}>}; responses:Record<string,{description:string;content?:Record<string,unknown>}> };
-const groups = ['技能', '社区审核', '留言', '密钥', '认证', '系统'] as const;
+const groups = ['技能', 'AgentHub', '社区审核', '留言', '密钥', '认证', '系统'] as const;
 const titles: Record<string, string> = {
   'GET /skills':'搜索技能', 'POST /skills':'发布 ZIP / 新版本', 'GET /skills/{id}':'技能详情',
   'PATCH /skills/{id}':'编辑展示资料', 'DELETE /skills/{id}':'删除技能',
   'GET /skills/{id}/versions':'版本记录与下载量', 'DELETE /skills/{id}/versions/{version}':'删除单个私有版本', 'GET /skills/{id}/file':'读取 SKILL.md',
   'GET /skills/{id}/package':'包内容与摘要', 'GET /skills/{id}/download':'下载原始 ZIP',
   'PUT /skills/{id}/favorite':'加入收藏', 'DELETE /skills/{id}/favorite':'取消收藏',
-  'GET /package-template':'下载示例包', 'GET /messages':'留言列表', 'POST /messages':'发布便利贴',
+  'GET /package-template':'下载示例包', 'GET /agents':'我的 Agent', 'POST /agents':'新建 Agent',
+  'GET /agents/{id}':'Agent 详情', 'PATCH /agents/{id}':'更新 Agent', 'DELETE /agents/{id}':'删除 Agent',
+  'POST /agents/{id}/invoke':'调用回执', 'GET /messages':'留言列表', 'POST /messages':'发布便利贴',
   'GET /messages/{id}':'留言全文', 'GET /keys':'密钥列表', 'POST /keys':'创建密钥',
   'DELETE /keys/{id}':'撤销密钥', 'GET /health':'健康检查', 'GET /meta':'工作区信息',
   'GET /openapi.json':'OpenAPI 规范',
@@ -18,21 +20,23 @@ const titles: Record<string, string> = {
 const descriptions: Record<string, string> = {
   q:'搜索名称、描述、标签或 SKILL.md 正文。', category:'技能分类。', favorites:'只查看工作区收藏，设为 true。',
   offset:'从第几条开始，配合 limit 分页。', limit:'每页条数。', agent:'按声明适用的 Agent 过滤。', sort:'结果排序。',
-  id:'技能 ID；留言和密钥接口使用对应记录的 ID。发布时省略则取 frontmatter.name。', version:'数字 x.y.z；上传可省略以自动递增，读取省略时为自己最新版或已通过的社区版本。',
+  id:'记录 ID。技能发布时可省略并取 frontmatter.name；留言、密钥和 Agent 使用对应记录的 ID。', version:'数字 x.y.z；上传可省略以自动递增，读取省略时为自己最新版或已通过的社区版本。',
+  description:'说明。技能发布时可覆盖 SKILL.md 中的描述；Agent 为简介。',
   file:'ZIP 最大 50 MiB；包含一个 UTF-8 SKILL.md（不区分大小写），支持最多 12 层目录；缺失元数据自动推断，完整保留所有资源。',
   license:'许可证声明。', agents:'JSON 数组字符串，例如 ["codex","claude-code"]。',
-  tags:'JSON 数组字符串，例如 ["example"]。', description:'覆盖 SKILL.md 中的描述。', changelog:'本次版本说明。',
+  tags:'JSON 数组字符串，例如 ["example"]。', changelog:'本次版本说明。',
   content:'便签纯文本，不能为空。', author:'显示署名，省略时为匿名访客；不是登录身份。',
   color:'便签颜色。', position:'白板中的相对位置，省略时自动排布；填写时 x 和 y 均需提供。',
   'position.x':'横向位置，0 为左侧，1 为右侧。', 'position.y':'纵向位置，0 为上方，1 为下方。',
-  name:'密钥名称。',decision:'approve 通过；reject 驳回。只有管理员可处理待审核版本。',reason:'审核说明，最多 1000 字符。',status:'审核状态筛选。',scope:'read / write 为 Key 权限；mine / community / all 为技能库范围。',
+  name:'名称。',decision:'approve 通过；reject 驳回。只有管理员可处理待审核版本。',reason:'审核说明，最多 1000 字符。',status:'状态。审核列表为 pending / approved / rejected / withdrawn / all；Agent 为 draft / published。',scope:'read / write 为 Key 权限；mine / community / all 为技能库范围；Agent 列表目前仅为 mine。',
+  slug:'所有者范围内唯一的小写标识。留空时按名称生成。',persona:'Agent 的系统提示，只保存，不在本接口执行。',tools:'工具范围标签，最多 20 项。',upstreamUrl:'可选的 http(s) 地址，只保存，本接口不会请求它。',input:'调用输入，原样写入回执。',context:'可选 JSON，原样写入回执。',config:'人设、工具范围和可选上游地址。',
   service:'精确登记的登录回调，协议、主机、端口及结尾 / 均须一致。',ticket:'CAS 一次性 ST 票据，不写入日志或浏览器存储。',
 };
 export const docOperations = Object.entries(openapi.paths).flatMap(([path, methods]) =>
   Object.entries(methods).map(([verb, raw]) => {
     const method=verb.toUpperCase(), key=method+' '+path;
     return { key, anchor:verb+'-'+path.replace(/[{}]/g,'').replace(/\//g,'-').replace(/^-/,''), method, path,
-      title:titles[key]??key, group:path.startsWith('/admin')||path.endsWith('/community')||path.endsWith('/reviews')?'社区审核':path.startsWith('/skills')||path==='/package-template'?'技能':path.startsWith('/messages')?'留言':path.startsWith('/keys')?'密钥':path.startsWith('/auth')?'认证':'系统',
+      title:titles[key]??key, group:path.startsWith('/agents')?'AgentHub':path.startsWith('/admin')||path.endsWith('/community')||path.endsWith('/reviews')?'社区审核':path.startsWith('/skills')||path==='/package-template'?'技能':path.startsWith('/messages')?'留言':path.startsWith('/keys')?'密钥':path.startsWith('/auth')?'认证':'系统',
       operation:raw as Operation };
   })).sort((a,b)=>Object.keys(titles).indexOf(a.key)-Object.keys(titles).indexOf(b.key));
 export { groups };
@@ -55,11 +59,11 @@ export function docFields(doc:DocOperation) {
   ].filter(Boolean).join(' · ')}));
 }
 export function docExample(doc:DocOperation, origin:string, language:'curl'|'powershell') {
-  const id=doc.path.startsWith('/admin/skills')?'SKILL_ID':doc.path.startsWith('/admin')?'REVIEW_ID':doc.group==='留言'?'MESSAGE_ID':doc.group==='密钥'?'KEY_ID':'my-skill';
+  const id=doc.group==='AgentHub'?'AGENT_ID':doc.path.startsWith('/admin/skills')?'SKILL_ID':doc.path.startsWith('/admin')?'REVIEW_ID':doc.group==='留言'?'MESSAGE_ID':doc.group==='密钥'?'KEY_ID':'my-skill';
   let url=origin+'/api/v1'+doc.path.replace('{id}',id).replace('{reviewId}','REVIEW_ID');
   if(doc.key==='GET /skills')url+='?scope=mine&q=react&limit=12';
   if(!doc.path.startsWith('/admin')&&['/file','/package','/download'].some(p=>doc.path.endsWith(p)))url+='?version=1.0.0';
-  const body=doc.path.startsWith('/admin/skills')?{reason:'管理员处理不合规社区内容'}:(doc.key==='POST /skills/{id}/community'||doc.key==='POST /skills/{id}/ai')?{version:'1.0.0'}:doc.key==='POST /admin/reviews/{id}/decision'?{decision:'approve',reason:'审核通过'}:doc.key==='POST /messages'?{content:'通过 API 留下一张便签',author:'Alex',color:'yellow',position:{x:0.35,y:0.6}}:doc.key==='POST /keys'?{name:'my-integration',scope:'read'}:doc.key==='POST /auth/cas/exchange'?{ticket:'ST-REPLACE-WITH-ONE-TIME-TICKET',service:origin+'/'}:null;
+  const body=doc.key==='POST /agents'?{name:'值班助手',slug:'duty-assistant',description:'回答值班问题',status:'draft',config:{persona:'你是值班助手。',tools:['search']}}:doc.key==='PATCH /agents/{id}'?{status:'published',config:{persona:'你是值班助手。'}}:doc.key==='POST /agents/{id}/invoke'?{input:'今天有哪些待办？',context:{locale:'zh-CN'}}:doc.path.startsWith('/admin/skills')?{reason:'管理员处理不合规社区内容'}:(doc.key==='POST /skills/{id}/community'||doc.key==='POST /skills/{id}/ai')?{version:'1.0.0'}:doc.key==='POST /admin/reviews/{id}/decision'?{decision:'approve',reason:'审核通过'}:doc.key==='POST /messages'?{content:'通过 API 留下一张便签',author:'Alex',color:'yellow',position:{x:0.35,y:0.6}}:doc.key==='POST /keys'?{name:'my-integration',scope:'read'}:doc.key==='POST /auth/cas/exchange'?{ticket:'ST-REPLACE-WITH-ONE-TIME-TICKET',service:origin+'/'}:null;
   const session=doc.group==='密钥'||doc.group==='认证',protectedCall=!['/health','/openapi.json'].includes(doc.path)&&doc.group!=='认证';
   if(doc.key==='GET /auth/login')return language==='powershell'?`Start-Process "${url}"`:`# 在浏览器打开\n# ${url}`;
   const cookieName=origin.startsWith('https:')?'__Host-skillhub_session':'skillhub_cas_session';

@@ -106,6 +106,10 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | DELETE | `/keys/{id}` | 撤销 Key |
 | GET / POST | `/messages` | 留言列表 / 发布便签 |
 | GET / DELETE | `/messages/{id}` | 全文 / 管理员删除便签 |
+| GET / POST | `/agents` | 当前账号的 Agent 列表 / 新建（`scope=mine`） |
+| GET | `/agents/{id}` | 所有者读取 Agent；其他人 404 |
+| PATCH / DELETE | `/agents/{id}` | 所有者更新 / 删除 |
+| POST | `/agents/{id}/invoke` | 接受 `{ input, context? }` 并返回回执与配置快照，不执行外部任务 |
 | POST / DELETE | `/skills/{id}/community` | 所有者提交审核 / 撤回社区 |
 | GET | `/skills/{id}/reviews` | 所有者审核记录 |
 | GET | `/admin/reviews` | 管理员审核列表 |
@@ -117,6 +121,8 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | POST | `/admin/reviews/{id}/decision` | 管理员通过 / 驳回 |
 
 `GET /skills` 支持 `scope=mine / community / all`（默认 mine，收藏查询默认 all）、`q`、`category`、`favorites=true`、`offset`（默认 0）、`limit`（默认 24，1–100）、`agent`、`sort`。category 为 `development / design / productivity / testing / documentation`；agent 为 `claude-code / codex / cursor / gemini-cli`；sort 为 `featured / newest / name / compact`。Agent / 排序仅为 API 参数，不显示 UI 筛选。`version` 不传时，所有者读取私有最新版；其他用户读取最新通过的社区版本。其他用户的版本列表和指定版本下载只开放已通过的版本，未审核版本返回 404。
+
+`/agents` 是 AgentHub 实体，与技能包上的 `agents` 兼容标签不是同一件事。列表默认且目前仅 `scope=mine`，按 `updated_at` 倒序，支持 `q`、`offset`、`limit`（默认 24，1–100）。创建、更新、删除和 `invoke` 需要写权限；只读 Key 可以查看自己的 Agent。`config` 保存人设、工具范围和可选 `upstreamUrl`。`POST /agents/{id}/invoke` 的正文为 `{ "input": "...", "context": {} }`，响应回执包含 `accepted`、时间和 Agent 快照，不调用上游、不跑执行器。
 
 ### 私有库、社区与管理员
 

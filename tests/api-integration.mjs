@@ -4,7 +4,7 @@ import { zipSync, strToU8, unzipSync } from 'fflate';
 import { createHash } from 'node:crypto';
 const base=process.env.SKILLGO_TEST_ORIGIN??'http://127.0.0.1:5173';
 if(!['localhost','127.0.0.1'].includes(new URL(base).hostname))throw new Error('Local QA only.');
-const skillId='qa-skill-'+Date.now();let assertions=0;const keys=[];
+const skillId='qa-skill-'+Date.now();let assertions=0;const keys=[];let agentId='';
 const check=(condition,label)=>{assert.ok(condition,label);assertions++;};
 const hash=bytes=>'sha256:'+createHash('sha256').update(bytes).digest('hex');
 const markdown=`---\nname: ${skillId}\ndescription: Local ZIP QA fixture, never executed.\n---\n\n# Test\nVerify upload and download.`;
@@ -49,12 +49,26 @@ try{
   const key=await request('keys','POST',{name:'Local ZIP QA',scope:'read'});check(key.status===201&&key.data.token.startsWith('sg_'),'key create via API');keys.push(key.data.id);
   check(!(await request('keys')).data.some(k=>'token'in k||'hash'in k),'key list omits secrets');
   const auth={Authorization:'Bearer '+key.data.token};check((await request('skills','GET',undefined,auth)).status===200,'read key works');check((await request('skills/'+skillId+'/favorite','DELETE',undefined,auth)).status===403,'read key cannot mutate');
+  const agent=await request('agents','POST',{name:'QA Agent',slug:'qa-agent-'+skillId,description:'Local agent fixture',config:{persona:'Stay local.',tools:['search'],upstreamUrl:'http://127.0.0.1:9/unused'}});
+  check(agent.status===201&&agent.data.owner==='local-workspace'&&agent.data.status==='draft'&&agent.data.id.startsWith('ag-'),'agent create');
+  agentId=agent.data.id;
+  check((await request('agents?scope=mine&q='+encodeURIComponent('QA Agent'))).data.items.some(item=>item.id===agentId),'agent list is owner scoped');
+  check((await request('agents?scope=all')).status===400,'agent scope stays mine');
+  const patched=await request('agents/'+agentId,'PATCH',{status:'published',config:{tools:['search','notes']}});
+  check(patched.status===200&&patched.data.status==='published'&&patched.data.config.persona==='Stay local.'&&patched.data.config.tools.join()==='search,notes','agent patch merges config');
+  const receipt=await request('agents/'+agentId+'/invoke','POST',{input:'hello',context:{lane:'qa'}});
+  check(receipt.status===200&&receipt.data.status==='accepted'&&receipt.data.agent.id===agentId&&receipt.data.agent.config.tools.includes('notes')&&receipt.data.input==='hello'&&receipt.data.context.lane==='qa'&&receipt.data.output===undefined,'invoke returns a receipt only');
+  check((await request('agents/'+agentId+'/invoke','POST',{input:'nope'},auth)).status===403,'read key cannot invoke');
+  check((await request('agents/'+agentId,'DELETE')).data.deleted===true,'agent delete');
+  check((await request('agents/'+agentId)).status===404,'deleted agent is gone');
+  agentId='';
   check((await request('keys/'+key.data.id,'DELETE')).status===200,'key revoke via API');check((await request('meta','GET',undefined,auth)).status===401,'revoked key rejected');
   check((await request('skills/'+skillId+'/favorite','DELETE')).status===200,'favorite remove via API');
   await mkdir('outputs',{recursive:true});await writeFile('outputs/qa-upload.zip',archive);await writeFile('outputs/qa-ui.json',JSON.stringify({skillId,version:'3.0.0'}));
   console.log(`PASS: ${assertions} local API assertions; ZIP bytes, resources, historical versions, API-only workflow and removed routes verified.`);
 }finally{
   for(const id of keys)await request('keys/'+id,'DELETE').catch(()=>{});
+  if(agentId)await request('agents/'+agentId,'DELETE').catch(()=>{});
   await request('skills/'+skillId+'/favorite','DELETE').catch(()=>{});
   await mkdir('outputs',{recursive:true});await writeFile('outputs/qa-cleanup.sql',`DELETE FROM favorites WHERE skill_id='${skillId}';\nDELETE FROM package_chunks WHERE skill_id='${skillId}';\nDELETE FROM packages WHERE skill_id='${skillId}';\nDELETE FROM versions WHERE skill_id='${skillId}';\nDELETE FROM skills WHERE id='${skillId}';\n`);
 }

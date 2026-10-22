@@ -15,3 +15,10 @@ export interface Skill {
   tokenEstimate: number; permissions: string[]; favorite: boolean; favoriteCount: number;
 }
 export interface PackageMetadata { digest: string; size: number; filename: string; root: string; files: {path:string;size:number}[]; kind: 'uploaded' | 'catalog-markdown'; }
+export type AgentStatus = 'draft' | 'published';
+export type AgentConfig = { persona: string; tools: string[]; upstreamUrl: string | null };
+// AgentHub record. Not the skills.agents compatibility tags.
+export interface HubAgent {
+  id: string; slug: string; name: string; description: string; owner: string;
+  config: AgentConfig; status: AgentStatus; createdAt: string; updatedAt: string;
+}

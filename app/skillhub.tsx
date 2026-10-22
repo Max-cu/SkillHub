@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
-import { ArrowDownToLine, ArrowRight, ArrowUpRight, BookOpen, Bookmark, Check, CircleHelp, Code2, Command, Copy, FileCode2, GitBranch, Layers3, LayoutDashboard, Loader2, LockKeyhole, Plus, Terminal, Trash2, X, Zap, FlaskConical, Palette, Search, Sparkles } from 'lucide-react';
+import { ArrowDownToLine, ArrowRight, ArrowUpRight, BookOpen, Bookmark, Bot, Check, CircleHelp, Code2, Command, Copy, FileCode2, GitBranch, Layers3, LayoutDashboard, Loader2, LockKeyhole, Plus, Terminal, Trash2, X, Zap, FlaskConical, Palette, Search, Sparkles } from 'lucide-react';
 import Modal from './modal';
 import Markdown from './markdown';
 import MessageBoard from './message-board';
@@ -11,10 +11,10 @@ import AdminView,{CardCommunityButton,CommunityControls,CommunityModeration,Revi
 import type { Review } from '@/lib/community';
 import { api } from '@/lib/client-api';
 import { MAX_ZIP_BYTES } from '@/lib/package-limits.mjs';
-import { AGENTS, CATEGORIES, type Agent, type Category, type Skill, type PackageMetadata } from '@/lib/types';
+import { AGENTS, CATEGORIES, type Agent, type AgentStatus, type Category, type HubAgent, type Skill, type PackageMetadata } from '@/lib/types';
 
 gsap.registerPlugin(useGSAP);
-type View = 'discover' | 'favorites' | 'board' | 'api' | 'research' | 'admin';
+type View = 'discover' | 'agents' | 'favorites' | 'board' | 'api' | 'research' | 'admin';
 type Summary = Omit<Skill, 'markdown'>;
 type Meta = { workspace?:'local'|'shared'|'cas'|null;loginConfigured?:boolean;aiEnabled?:boolean;skillCount:number;sourceCount:number;favoriteCount:number;user:{id:string;displayName?:string;email?:string;scope:string;role:'user'|'admin'}|null };
 const categoryLabels: Record<Category|'auto',string> = { auto:'AI 分类中', development:'开发工程', design:'设计创意', productivity:'效率工具', testing:'测试与调试', documentation:'文档写作' };
@@ -104,6 +104,7 @@ export default function SkillHub() {
         <button className="brand" onClick={()=>navigate('discover')} aria-label="SkillHub 首页"><img className="company-logo" src="/tianchen-logo.png" alt="中国化学 · 天辰公司 CNCEC TIANCHEN" width="1074" height="359" /></button>
         <nav className="main-nav" aria-label="主导航">
           <button className={view==='discover'?'active':''} onClick={()=>navigate('discover')}>发现</button>
+          <button className={view==='agents'?'active':''} onClick={()=>navigate('agents')}>AgentHub</button>
           <button className={view==='favorites'?'active':''} onClick={()=>navigate('favorites')}>收藏</button>
           <button className={view==='board'?'active':''} onClick={()=>navigate('board')}>留言板</button>
           <button className={view==='api'?'active':''} onClick={()=>navigate('api')}>开发者 API</button>
@@ -126,7 +127,7 @@ export default function SkillHub() {
           <div className="category-tabs" aria-label="分类筛选"><button className={!category?'active':''} onClick={()=>setCategory('')}>全部技能</button>{CATEGORIES.map(c=><button key={c} className={category===c?'active':''} onClick={()=>setCategory(c)}>{categoryLabels[c]}</button>)}</div>
           {error?<div className="empty-state"><CircleHelp size={28}/><h3>暂时无法加载</h3><p>{error}</p><button className="secondary-btn" onClick={reload}>重试</button></div>:loading?<div className="skill-grid">{[0,1,2,3,4,5].map(i=><div className="skeleton-card" key={i}><div/><span/><span/><span/></div>)}</div>:skills.length?<><div className="skill-grid">{skills.map(skill=><article className="skill-card" key={skill.id} data-skill-id={skill.id}><div className="card-top"><SkillIcon skill={skill}/><div className="card-badges"><button className={`icon-btn bookmark-btn ${skill.favorite?'saved':''}`} onClick={()=>favorite(skill)} aria-label={skill.favorite?'取消收藏 '+skill.name:'收藏 '+skill.name}><Bookmark size={17} fill={skill.favorite?'currentColor':'none'}/></button></div></div><button className="card-content" onClick={()=>inspect(skill)}><h3>{skill.name}<ArrowUpRight size={15}/></h3><span className="card-author">{skill.source?skill.source.replace('https://github.com/','').split('/')[0]:skill.owner===meta?.user?.id?'我的技能':'社区发布'}{['queued','running'].includes(skill.aiStatus)&&' · AI 整理中'}<span className="author-dot">·</span>v{skill.version}</span><p>{skill.description}</p></button><div className="card-tags">{skill.tags.slice(0,3).map(t=><button key={t} onClick={()=>setQuery(t)}>{t}</button>)}</div><div className="card-footer"><span className="card-compatibility">{categoryLabels[skill.category]}</span><div className="card-actions">{skill.owner===meta?.user?.id&&<CardCommunityButton skill={skill} notify={notify} onSubmitted={reload}/>}<a className="card-download" href={`/api/v1/skills/${skill.id}/download?version=${skill.version}`} aria-label={'下载 '+skill.name+' ZIP'}><ArrowDownToLine size={14}/>下载</a></div></div></article>)}</div>{skills.length<total&&<button className="secondary-btn load-more" disabled={moreLoading} onClick={loadMore}>{moreLoading?<Loader2 className="spin" size={15}/>:<Plus size={15}/>}加载更多</button>}</>: <div className="empty-state">{view==='favorites'?<Bookmark size={30}/>:<Search size={30}/>}<h3>{view==='favorites'?(!meta?.user?'登录，建立你的技能收藏':'还没有收藏的技能'):'还没有找到匹配的技能'}</h3><p>{view==='favorites'?(!meta?.user?'收藏会保存在你的工作空间中。':'在「发现」里点卡片右上角的星标，把常用技能收进这里。'):'换个关键词，或调整分类。'}</p>{view==='favorites'?!meta?.user?<a className="primary-btn" href="/api/v1/auth/login">登录</a>:<button className="primary-btn" onClick={()=>navigate('discover')}>去发现</button>:<button className="secondary-btn" onClick={()=>{setQuery('');setCategory('');}}>清空筛选</button>}</div>}
         </section>
-      </>:view==='board'?<MessageBoard notify={notify} isAdmin={meta?.user?.role==='admin'}/>:view==='api'?<ApiView meta={meta} notify={notify} copy={copy}/>:view==='admin'&&meta?.user?.role==='admin'?<AdminView refresh={refresh} inspect={inspectReview}/>:<ResearchView/>}
+      </>:view==='agents'?<AgentHub notify={notify}/>:view==='board'?<MessageBoard notify={notify} isAdmin={meta?.user?.role==='admin'}/>:view==='api'?<ApiView meta={meta} notify={notify} copy={copy}/>:view==='admin'&&meta?.user?.role==='admin'?<AdminView refresh={refresh} inspect={inspectReview}/>:<ResearchView/>}
       <footer className="page-footer" aria-label="技术支持"><button className="support-credit" onClick={()=>navigate('research')} aria-label="技术支持 SkillGo · 关于 SkillHub"><SupportLogo/><span>技术支持 · SkillGo</span></button><span className="support-divider" aria-hidden="true">/</span><span>{meta?.workspace!=='local'?'独立部署 · 数据保存在服务器':'本地运行 · 数据保存在本机'}</span></footer>
       </main>
     </div>
@@ -248,10 +249,94 @@ function ApiView({meta,notify,copy}:{meta:Meta|null;notify:(s:string)=>void;copy
   const createKey=async(e:FormEvent)=>{e.preventDefault();setBusy(true);setKeyError('');try{const r=await api<{token:string}>('keys',{method:'POST',body:JSON.stringify({name,scope})});setToken(r.token);setName('');loadKeys();notify('API Key 已创建，仅展示一次');}catch(e){setKeyError((e as Error).message);}finally{setBusy(false);}};
   const revoke=async(id:string)=>{try{await api('keys/'+id,{method:'DELETE'});setToken('');loadKeys();notify('API Key 已撤销');}catch(e){setKeyError((e as Error).message);}};
   const run=async()=>{setRunning(true);try{let options:RequestInit={};if(endpoint==='upload'){if(!apiFile)throw new Error('请选择 ZIP 包');const form=new FormData();form.append('file',apiFile);options={method:'POST',body:form};}const r=await fetch('/api/v1/'+(endpoint==='upload'?'skills':endpoint),options);if(r.status===401)window.dispatchEvent(new Event('skillhub-session-expired'));setResult('HTTP '+r.status+'\n'+JSON.stringify(await r.json(),null,2));}catch(e){setResult((e as Error).message);}finally{setRunning(false);}};
-  const endpoints=[['GET','/skills','搜索、分类与分页'],['POST','/skills','上传标准 ZIP 技能包'],['GET','/skills/{id}','技能详情'],['GET','/skills/{id}/versions','不可变版本与下载量'],['DELETE','/skills/{id}/versions/{version}','删除单个私有版本'],['GET','/skills/{id}/package','包内容与摘要'],['GET','/skills/{id}/download','完整 ZIP 下载'],['PUT / DELETE','/skills/{id}/favorite','收藏管理'],['GET','/package-template','下载 ZIP 示例包'],['GET / POST','/keys','查询与创建 API Key'],['DELETE','/keys/{id}','撤销 API Key'],['GET / POST','/messages','查看与发布便利贴'],['GET / DELETE','/messages/{id}','全文 / 管理员删除'],['POST / DELETE','/skills/{id}/community','提交审核 / 撤回社区'],['GET','/skills/{id}/reviews','查看自己的审核记录'],['GET','/admin/reviews','管理员审核列表'],['POST','/admin/reviews/{id}/decision','管理员通过 / 驳回']];
+  const endpoints=[['GET','/skills','搜索、分类与分页'],['POST','/skills','上传标准 ZIP 技能包'],['GET','/skills/{id}','技能详情'],['GET','/skills/{id}/versions','不可变版本与下载量'],['DELETE','/skills/{id}/versions/{version}','删除单个私有版本'],['GET','/skills/{id}/package','包内容与摘要'],['GET','/skills/{id}/download','完整 ZIP 下载'],['PUT / DELETE','/skills/{id}/favorite','收藏管理'],['GET','/package-template','下载 ZIP 示例包'],['GET / POST','/agents','我的 Agent 列表 / 新建'],['GET','/agents/{id}','Agent 详情'],['PATCH','/agents/{id}','所有者更新 Agent'],['DELETE','/agents/{id}','所有者删除 Agent'],['POST','/agents/{id}/invoke','调用回执，不执行外部任务'],['GET / POST','/keys','查询与创建 API Key'],['DELETE','/keys/{id}','撤销 API Key'],['GET / POST','/messages','查看与发布便利贴'],['GET / DELETE','/messages/{id}','全文 / 管理员删除'],['POST / DELETE','/skills/{id}/community','提交审核 / 撤回社区'],['GET','/skills/{id}/reviews','查看自己的审核记录'],['GET','/admin/reviews','管理员审核列表'],['POST','/admin/reviews/{id}/decision','管理员通过 / 驳回']];
   return <><section className="page-heading"><span className="eyebrow">DEVELOPERS</span><h1>为你的工作流而开放。</h1><p>界面能做的事，你的应用也能。用一套 API 接入 SkillHub。</p></section><div className="api-overview"><span className="api-overview-icon"><Terminal size={30}/></span><div><span className="eyebrow">REST API · V1</span><h2>REST API · v1</h2><p>标准 JSON、精确版本、统一错误格式。API Key 支持只读或读写权限。</p></div><a className="secondary-btn" href="/docs" target="_blank" rel="noreferrer"><BookOpen size={15}/>API 文档</a></div><div className="api-columns"><section className="surface-panel"><div className="panel-heading"><h2>接口一览</h2><span className="subtle-tag">/api/v1</span></div><div className="endpoint-list">{endpoints.map(([method,path,label])=><div key={method+path}><span className={`method-badge ${method.startsWith('POST')?'post':''}`}>{method}</span><div><code>{path}</code><small>{label}</small></div></div>)}</div><a className="text-btn" href="/docs" target="_blank" rel="noreferrer">查看参数与调用示例 <ArrowUpRight size={14}/></a></section><section className="surface-panel playground"><div className="panel-heading"><h2>在线试一试</h2><span className="live-tag"><i/>LIVE</span></div><p>直接调用当前运行的 API。</p><label className="field">选择接口<select value={endpoint} onChange={e=>setEndpoint(e.target.value)}><option value="skills">GET /skills</option><option value="meta">GET /meta</option><option value="upload">POST /skills · 上传 ZIP</option></select></label>{endpoint==='upload'&&<label className="field">ZIP 文件<input type="file" accept=".zip,application/zip" onChange={e=>setApiFile(e.target.files?.[0]??null)}/></label>}<button className="primary-btn" onClick={run} disabled={running}>{running?<Loader2 className="spin" size={15}/>:<Terminal size={15}/>}发送请求</button><pre className="api-result" aria-live="polite">{result||'// 返回结果会显示在这里'}</pre></section></div><section className="surface-panel keys-panel"><div className="panel-heading"><div><h2>API Keys</h2><p>密钥仅在创建时展示，数据库保存单向摘要。</p></div><LockKeyhole size={20}/></div>{meta?.user?<><form className="key-create" onSubmit={createKey}><input aria-label="API Key 名称" placeholder="例如：开发环境" value={name} onChange={e=>setName(e.target.value)} required maxLength={60}/><select aria-label="API Key 权限" value={scope} onChange={e=>setScope(e.target.value)}><option value="read">只读</option><option value="write">读写</option></select><button className="primary-btn" disabled={busy}>{busy?<Loader2 className="spin" size={14}/>:<Plus size={14}/>}创建密钥</button></form>{token&&<div className="created-key"><strong>请保存密钥，关闭页面后无法再次查看。</strong><div><code>{token}</code><button className="icon-btn" onClick={()=>copy(token)} aria-label="复制新密钥"><Copy size={16}/></button></div></div>}{keys.length>0?<div className="key-list">{keys.map(k=><div key={k.id}><KeyIcon/><strong>{k.name}</strong><code>{k.prefix}…</code><span className="subtle-tag">{k.scope==='read'?'只读':'读写'}</span><button className="icon-btn" onClick={()=>revoke(k.id)} aria-label={'撤销 '+k.name}><Trash2 size={15}/></button></div>)}</div>:<p className="muted">还没有 API Key。</p>}</>:<p className="muted">正在加载工作区…</p>}{keyError&&<p className="form-error">{keyError}</p>}<div className="api-auth-note"><p>调用时使用 <code>Authorization: Bearer sg_…</code>。{meta?.loginConfigured?'当前登录公司账号；收藏和密钥仅属于你。':'当前为本地测试身份。'}</p></div></section></>;
 }
 function KeyIcon(){return <LockKeyhole size={16} className="muted"/>;}
+const agentStatusLabel: Record<AgentStatus,string> = { draft:'草稿', published:'已发布' };
+function AgentHub({notify}:{notify:(message:string)=>void}) {
+  const root=useRef<HTMLElement>(null);
+  const [query,setQuery]=useState(''),[debounced,setDebounced]=useState(''),[agents,setAgents]=useState<HubAgent[]>([]),[total,setTotal]=useState(0),[loading,setLoading]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[moreLoading,setMoreLoading]=useState(false);
+  const [selected,setSelected]=useState<HubAgent|null>(null),[creating,setCreating]=useState(false),[editing,setEditing]=useState(false),listKey=useRef<string|null>(null);
+  useEffect(()=>{const t=setTimeout(()=>setDebounced(query),250);return()=>clearTimeout(t);},[query]);
+  useEffect(()=>{
+    const silent=listKey.current===debounced;listKey.current=debounced;
+    let current=true;if(!silent)setLoading(true);setError('');
+    api<{items:HubAgent[];total:number}>('agents?scope=mine&limit=24&q='+encodeURIComponent(debounced)).then(v=>{if(current){setAgents(v.items);setTotal(v.total);}}).catch(e=>{if(current)setError(e.message);}).finally(()=>{if(current)setLoading(false);});
+    return()=>{current=false;};
+  },[debounced,refresh]);
+  useGSAP(()=>{
+    if(loading)return;
+    const mm=gsap.matchMedia();
+    mm.add('(prefers-reduced-motion: no-preference)',()=>{
+      const cards=root.current?.querySelectorAll('.skill-card');
+      if(cards?.length)gsap.from(cards,{y:14,autoAlpha:0,stagger:.06,duration:.55,ease:'power3.out',clearProps:'transform,opacity,visibility'});
+      const empty=root.current?.querySelector('.empty-state');
+      if(empty)gsap.from(empty,{y:14,autoAlpha:0,duration:.5,ease:'power3.out',clearProps:'transform,opacity,visibility'});
+    });
+    return()=>mm.revert();
+  },{scope:root,dependencies:[loading,agents],revertOnUpdate:true});
+  const loadMore=async()=>{setMoreLoading(true);try{const page=await api<{items:HubAgent[]}>('agents?scope=mine&limit=24&offset='+agents.length+'&q='+encodeURIComponent(debounced));setAgents(prev=>[...prev,...page.items]);}catch(e){notify((e as Error).message);}finally{setMoreLoading(false);}};
+  const saved=(agent:HubAgent,created:boolean)=>{setCreating(false);setEditing(false);setSelected(agent);setRefresh(v=>v+1);notify(created?'Agent 已保存':'Agent 已更新');};
+  return <><section className="page-heading"><span className="eyebrow">AGENTHUB</span><h1>我的 Agent。</h1></section><section className="catalog-section" ref={root}>
+    <div className="section-heading"><h2>全部 <span>{total}</span></h2><button className="text-btn" onClick={()=>{setSelected(null);setEditing(false);setCreating(true);}}>新建 Agent <Plus size={15}/></button></div>
+    <div className="catalog-controls"><div className="search-box"><Search size={18}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="搜索名称、标识或说明" aria-label="搜索 Agent"/>{query?<button className="icon-btn" onClick={()=>setQuery('')} aria-label="清空搜索"><X size={14}/></button>:null}</div></div>
+    {error?<div className="empty-state"><CircleHelp size={28}/><h3>暂时无法加载</h3><p>{error}</p><button className="secondary-btn" onClick={()=>setRefresh(v=>v+1)}>重试</button></div>:loading?<div className="skill-grid">{[0,1,2,3].map(i=><div className="skeleton-card" key={i}><div/><span/><span/><span/></div>)}</div>:agents.length?<><div className="skill-grid">{agents.map(agent=><article className="skill-card" key={agent.id} data-skill-id={agent.id}><div className="card-top"><span className="skill-icon"><Bot size={20} strokeWidth={1.7}/></span></div><button className="card-content" onClick={()=>{setEditing(false);setSelected(agent);}}><h3>{agent.name}<ArrowUpRight size={15}/></h3><span className="card-author">{agent.slug}</span><p>{agent.description||'还没有说明'}</p></button><div className="card-tags">{agent.config.tools.slice(0,3).map(tool=><button key={tool} onClick={()=>setQuery(tool)}>{tool}</button>)}</div><div className="card-footer"><span className="card-compatibility">{agentStatusLabel[agent.status]}</span></div></article>)}</div>{agents.length<total&&<button className="secondary-btn load-more" disabled={moreLoading} onClick={loadMore}>{moreLoading?<Loader2 className="spin" size={15}/>:<Plus size={15}/>}加载更多</button>}</>:<div className="empty-state"><Bot size={30}/><h3>{query?'没有匹配的 Agent':'还没有 Agent'}</h3><p>{query?'换个关键词。':'写下一个名称和人设，保存在你的账号里。'}</p>{query?<button className="secondary-btn" onClick={()=>setQuery('')}>清空搜索</button>:<button className="primary-btn" onClick={()=>{setSelected(null);setCreating(true);}}>新建 Agent</button>}</div>}
+  </section>
+  {creating&&<AgentEditor agent={null} onClose={()=>setCreating(false)} onSaved={agent=>saved(agent,true)}/>}
+  {selected&&editing&&<AgentEditor agent={selected} onClose={()=>setEditing(false)} onSaved={agent=>saved(agent,false)}/>}
+  {selected&&!editing&&<AgentDetail agent={selected} onClose={()=>setSelected(null)} onEdit={()=>setEditing(true)} onDeleted={()=>{setSelected(null);setRefresh(v=>v+1);notify('Agent 已删除');}} notify={notify}/>}
+  </>;
+}
+function AgentEditor({agent,onClose,onSaved}:{agent:HubAgent|null;onClose:()=>void;onSaved:(agent:HubAgent)=>void}) {
+  const [name,setName]=useState(agent?.name??''),[slug,setSlug]=useState(agent?.slug??''),[description,setDescription]=useState(agent?.description??''),[persona,setPersona]=useState(agent?.config.persona??''),[tools,setTools]=useState(agent?.config.tools.join(', ')??''),[upstreamUrl,setUpstreamUrl]=useState(agent?.config.upstreamUrl??''),[status,setStatus]=useState<AgentStatus>(agent?.status??'draft'),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const submit=async(e:FormEvent)=>{
+    e.preventDefault();if(agent&&!slug.trim()){setError('请填写 slug');return;}
+    setBusy(true);setError('');
+    const payload:Record<string,unknown>={name,description,status,config:{persona,tools:tools.split(/[,，]/).map(item=>item.trim()).filter(Boolean),upstreamUrl:upstreamUrl.trim()||null}};
+    if(slug.trim())payload.slug=slug.trim();
+    try{onSaved(await api<HubAgent>(agent?'agents/'+agent.id:'agents',{method:agent?'PATCH':'POST',body:JSON.stringify(payload)}));}
+    catch(err){setError((err as Error).message);setBusy(false);}
+  };
+  return <Modal title={agent?'编辑 Agent':'新建 Agent'} onClose={onClose} wide><form className="publish-form" onSubmit={submit}>
+    <div className="form-grid"><label className="field">名称<input value={name} onChange={e=>setName(e.target.value)} required maxLength={120} placeholder="例如：值班助手"/></label><label className="field">标识<input value={slug} onChange={e=>setSlug(e.target.value)} maxLength={100} placeholder={agent?'小写字母、数字和连字符':'留空则根据名称生成'} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" aria-label="Agent 标识"/></label></div>
+    <label className="field">说明<textarea value={description} onChange={e=>setDescription(e.target.value)} maxLength={4000} rows={3} placeholder="这个 Agent 用来做什么"/></label>
+    <label className="field">人设<textarea value={persona} onChange={e=>setPersona(e.target.value)} maxLength={20000} rows={5} placeholder="系统提示。只保存在这里，不会自动执行。"/></label>
+    <div className="form-grid"><label className="field">工具范围<input value={tools} onChange={e=>setTools(e.target.value)} placeholder="以逗号分隔，例如 search, notes"/></label><label className="field">状态<select aria-label="Agent 状态" value={status} onChange={e=>setStatus(e.target.value as AgentStatus)}><option value="draft">草稿</option><option value="published">已发布</option></select></label></div>
+    <label className="field">上游地址<span>选填。本版只保存，不会请求该地址。</span><input value={upstreamUrl} onChange={e=>setUpstreamUrl(e.target.value)} maxLength={500} placeholder="https://example.internal/v1" inputMode="url"/></label>
+    {error&&<div className="form-error" role="alert">{error}</div>}
+    <div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose} disabled={busy}>取消</button><button className="primary-btn" disabled={busy||!name.trim()}>{busy&&<Loader2 size={15} className="spin"/>}{busy?'正在保存…':'保存'}</button></div>
+  </form></Modal>;
+}
+function AgentDetail({agent,onClose,onEdit,onDeleted,notify}:{agent:HubAgent;onClose:()=>void;onEdit:()=>void;onDeleted:()=>void;notify:(message:string)=>void}) {
+  const [input,setInput]=useState(''),[context,setContext]=useState(''),[receipt,setReceipt]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(false),[deleting,setDeleting]=useState(false);
+  const invoke=async(e:FormEvent)=>{
+    e.preventDefault();setError('');
+    let parsed:unknown;
+    if(context.trim()){try{parsed=JSON.parse(context);}catch{setError('context 须为 JSON');return;}}
+    setBusy(true);
+    try{
+      const body:Record<string,unknown>={input};
+      if(context.trim())body.context=parsed;
+      setReceipt(JSON.stringify(await api('agents/'+agent.id+'/invoke',{method:'POST',body:JSON.stringify(body)}),null,2));
+    }catch(err){setError((err as Error).message);}finally{setBusy(false);}
+  };
+  const remove=async()=>{if(deleting)return;setDeleting(true);try{await api('agents/'+agent.id,{method:'DELETE'});onDeleted();}catch(err){notify((err as Error).message);setDeleting(false);}};
+  return <Modal title={agent.name} onClose={onClose} wide>
+    <div className="detail-summary"><span className="skill-icon"><Bot size={20} strokeWidth={1.7}/></span><div><p>{agent.description||'还没有说明'}</p><span>{agent.slug} <span className="footer-dot">·</span> {agentStatusLabel[agent.status]}</span></div></div>
+    <div className="detail-actions"><button className="text-btn" onClick={onEdit}>编辑资料</button><button className="text-btn danger-text" onClick={()=>setConfirm(true)} disabled={deleting}>删除 Agent</button></div>
+    {confirm&&<div className="delete-confirm" role="alertdialog" aria-label="确认删除 Agent"><span>永久删除「{agent.name}」？此操作不可恢复。</span><div className="delete-confirm-actions"><button className="secondary-btn" onClick={()=>setConfirm(false)} disabled={deleting}>取消</button><button className="primary-btn" disabled={deleting} onClick={remove}>{deleting&&<Loader2 size={14} className="spin"/>}{deleting?'正在删除…':'确认删除'}</button></div></div>}
+    <form className="publish-form" onSubmit={invoke}>
+      {agent.config.persona?<label className="field">人设<pre className="markdown-code">{agent.config.persona}</pre></label>:null}
+      <p className="publish-privacy">{agent.config.tools.length?'工具范围：'+agent.config.tools.join('、'):'还没有声明工具范围。'}{agent.config.upstreamUrl?' 上游地址已保存，调用时不会请求它。':''}</p>
+      <label className="field">调用输入<textarea value={input} onChange={e=>setInput(e.target.value)} required maxLength={20000} rows={4} placeholder="要交给这个 Agent 的内容"/></label>
+      <label className="field">上下文 JSON<span>选填。只写入回执，不会执行。</span><textarea value={context} onChange={e=>setContext(e.target.value)} rows={3} placeholder='{"locale":"zh-CN"}'/></label>
+      {error&&<div className="form-error" role="alert">{error}</div>}
+      <div className="modal-footer"><button className="primary-btn" disabled={busy||!input.trim()}>{busy&&<Loader2 size={15} className="spin"/>}{busy?'正在提交…':'生成回执'}</button></div>
+      {receipt&&<pre className="api-result" aria-live="polite">{receipt}</pre>}
+    </form>
+  </Modal>;
+}
 function ResearchView() {
   const rows=[{name:'Vercel Skills',url:'https://github.com/vercel-labs/skills',good:'通用 SKILL.md 格式与多 Agent 生态。',choice:'保留通用格式；发布只接收 ZIP，不提供 GitHub 导入。',icon:Terminal},{name:'ClawHub',url:'https://github.com/openclaw/clawhub',good:'注册表、不可变版本与完整的 API。',choice:'借鉴版本与 API 模型，完整保存上传包。',icon:Layers3},{name:'SkillHub Local',url:'https://github.com/mjalalimanesh/skillhub-local',good:'集中管理本机技能，清晰展示内容。',choice:'保持极简 PC 工作台，专注搜索、发布、下载和收藏。',icon:LayoutDashboard}];
   return <><section className="page-heading"><span className="eyebrow">ABOUT</span><h1>关于 SkillHub。</h1><p>一个简单的技能库。</p></section><div className="research-grid">{rows.map(row=><article className="surface-panel research-card" key={row.name}><span className="skill-icon"><row.icon size={24}/></span><h2>{row.name}</h2><h4>值得借鉴</h4><p>{row.good}</p><h4>我们的选择</h4><p>{row.choice}</p><a className="text-btn" href={row.url} target="_blank" rel="noreferrer">查看调研项目 <ArrowUpRight size={14}/></a></article>)}</div></>;
