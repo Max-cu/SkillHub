@@ -2,8 +2,8 @@ import { getDb, type PgStatement } from '../db/index';
 import { assertDatabase, getPool } from '../db/postgres.mjs';
 import catalog from './catalog.json';
 import { ApiError, compareVersion, digest, permissions, validAgent, validatePublish, validateMetadataUpdate } from './domain';
-import { agentPagination, agentReceipt, defaultAgentSlug, mapAgent, mergeAgentConfig, validateAgentCreate, validateAgentPatch, validateInvoke, type AgentRow } from './agents';
-import { AGENTS, CATEGORIES, type Skill } from './types';
+import { agentPagination, agentReceipt, authorizeAgentSkillWrites, defaultAgentSlug, mapAgent, mergeAgentConfig, omitAgentSkills, resolveSkillSnapshots, validateAgentCreate, validateAgentPatch, validateInvoke, type AgentRow, type ReadableSkillVersion, type SkillAccess } from './agents';
+import { AGENT_SKILL_ID, AGENTS, CATEGORIES, type Skill } from './types';
 import { openapi } from './openapi';
 import { messagePagination, validateMessage, type BoardMessage } from './board';
 import { inspectPackage, markdownPackage, packageTemplate, MAX_ZIP_BYTES, type PackageInfo } from './package';
@@ -280,8 +280,28 @@ async function ownedAgent(id: string, owner: string) {
   if (!row) throw new ApiError(404, 'agent_not_found', 'Agent 不存在');
   return mapAgent(row);
 }
+async function resolveAgentSkillSlug(userId: string, slug: string): Promise<string | null | 'ambiguous'> {
+  const own = await db().prepare('SELECT id FROM skills WHERE owner=$1 AND slug=$2').bind(userId, slug).first<{id:string}>();
+  if (own) return AGENT_SKILL_ID.test(own.id) ? own.id : null;
+  const rows = await db().prepare(`SELECT s.id FROM skills s WHERE s.slug=$1 AND s.owner<>$2 AND s.community_blocked=false AND s.community_version IS NOT NULL AND (EXISTS (SELECT 1 FROM community_reviews cr WHERE cr.skill_id=s.id AND cr.version=s.community_version AND cr.status='approved') OR s.owner='upstream-catalog')`).bind(slug, userId).all<{id:string}>();
+  const ids = rows.results.map(row => row.id).filter(id => AGENT_SKILL_ID.test(id));
+  if (ids.length > 1) return 'ambiguous';
+  return ids[0] ?? null;
+}
+async function readAgentSkill(userId: string, skillId: string, version?: string): Promise<ReadableSkillVersion | null> {
+  if (!AGENT_SKILL_ID.test(skillId)) return null;
+  try {
+    const skill = await getSkill(skillId, userId, version);
+    return { skillId: skill.id, version: skill.version, name: skill.name, digest: skill.digest, markdown: skill.markdown, owner: skill.owner, communityBlocked: skill.communityBlocked };
+  } catch (error) {
+    if (error instanceof ApiError && error.code === 'skill_not_found') return null;
+    throw error;
+  }
+}
+const skillAccess: SkillAccess = { resolveSlug: resolveAgentSkillSlug, read: readAgentSkill };
 async function createAgent(owner: string, input: Record<string, unknown>) {
-  const value = validateAgentCreate(input), time = now(), slug = value.slug ?? defaultAgentSlug(value.name), id = 'ag-'+crypto.randomUUID();
+  validateAgentCreate(omitAgentSkills(input));
+  const value = validateAgentCreate(await authorizeAgentSkillWrites(owner, input, skillAccess)), time = now(), slug = value.slug ?? defaultAgentSlug(value.name), id = 'ag-'+crypto.randomUUID();
   try {
     const row = await db().prepare(`INSERT INTO agents (id,slug,name,description,owner,config,status,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING ${agentReturning}`).bind(id, slug, value.name, value.description, owner, JSON.stringify(value.config), value.status, time, time).first<AgentRow>();
     if (!row) throw new ApiError(500, 'invalid_agent', 'Agent 未能保存');
@@ -292,7 +312,9 @@ async function createAgent(owner: string, input: Record<string, unknown>) {
   }
 }
 async function updateAgent(id: string, owner: string, input: Record<string, unknown>) {
-  const current = await ownedAgent(id, owner), patch = validateAgentPatch(input), time = now();
+  const current = await ownedAgent(id, owner), time = now();
+  validateAgentPatch(omitAgentSkills(input));
+  const patch = validateAgentPatch(await authorizeAgentSkillWrites(owner, input, skillAccess));
   try {
     const row = await db().prepare(`UPDATE agents SET slug=$1,name=$2,description=$3,config=$4,status=$5,updated_at=$6 WHERE id=$7 AND owner=$8 RETURNING ${agentReturning}`).bind(patch.slug ?? current.slug, patch.name ?? current.name, patch.description ?? current.description, JSON.stringify(mergeAgentConfig(current.config, patch.config)), patch.status ?? current.status, time, id, owner).first<AgentRow>();
     if (!row) throw new ApiError(404, 'agent_not_found', 'Agent 不存在');
@@ -482,7 +504,9 @@ export async function handle(request: Request) {
       }
       if (method === 'POST' && path.length === 3 && path[2] === 'invoke') {
         const writer = (await identity(request, true, true))!;
-        return json(agentReceipt(await ownedAgent(path[1], writer.userId), validateInvoke(await body(request))));
+        const agent = await ownedAgent(path[1], writer.userId);
+        const skillsResolved = await resolveSkillSnapshots(writer.userId, agent.config.skills, skillAccess);
+        return json(agentReceipt(agent, validateInvoke(await body(request)), undefined, undefined, skillsResolved));
       }
       throw new ApiError(404, 'route_not_found', '接口不存在');
     }
