@@ -109,7 +109,7 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 | GET / POST | `/agents` | 当前账号的 Agent 列表 / 新建（`scope=mine`） |
 | GET | `/agents/{id}` | 所有者读取 Agent；其他人 404 |
 | PATCH / DELETE | `/agents/{id}` | 所有者更新 / 删除 |
-| POST | `/agents/{id}/invoke` | 接受 `{ input, context? }` 并返回回执与配置快照，不执行外部任务 |
+| POST | `/agents/{id}/invoke` | 接受 `{ input, context? }`。无上游时返回 `accepted`；允许名单内则转发并返回 `completed` 或 `failed` |
 | POST / DELETE | `/skills/{id}/community` | 所有者提交审核 / 撤回社区 |
 | GET | `/skills/{id}/reviews` | 所有者审核记录 |
 | GET | `/admin/reviews` | 管理员审核列表 |
@@ -122,7 +122,9 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 
 `GET /skills` 支持 `scope=mine / community / all`（默认 mine，收藏查询默认 all）、`q`、`category`、`favorites=true`、`offset`（默认 0）、`limit`（默认 24，1–100）、`agent`、`sort`。category 为 `development / design / productivity / testing / documentation`；agent 为 `claude-code / codex / cursor / gemini-cli`；sort 为 `featured / newest / name / compact`。Agent / 排序仅为 API 参数，不显示 UI 筛选。`version` 不传时，所有者读取私有最新版；其他用户读取最新通过的社区版本。其他用户的版本列表和指定版本下载只开放已通过的版本，未审核版本返回 404。
 
-`/agents` 是 AgentHub 实体，与技能包上的 `agents` 兼容标签不是同一件事。列表默认且目前仅 `scope=mine`，按 `updated_at` 倒序，支持 `q`、`offset`、`limit`（默认 24，1–100）。创建、更新、删除和 `invoke` 需要写权限；只读 Key 可以查看自己的 Agent。`config` 保存人设、工具范围和可选 `upstreamUrl`。`POST /agents/{id}/invoke` 的正文为 `{ "input": "...", "context": {} }`，响应回执包含 `accepted`、时间和 Agent 快照，不调用上游、不跑执行器。
+`/agents` 是 AgentHub 实体，与技能包上的 `agents` 兼容标签不是同一件事。列表默认且目前仅 `scope=mine`，按 `updated_at` 倒序，支持 `q`、`offset`、`limit`（默认 24，1–100）。创建、更新、删除和 `invoke` 需要写权限；只读 Key 可以查看自己的 Agent。`config` 保存人设、工具范围、技能引用和可选 `upstreamUrl`。`POST /agents/{id}/invoke` 的正文为 `{ "input": "...", "context": {} }`，需要写权限的 `sg_` Key。`upstreamUrl` 为空，或 `AGENTHUB_INVOKE_PROXY=0` 时，只返回 `accepted` 回执和 `skillsResolved`，不外呼。`upstreamUrl` 有值时，仅当 `AGENTHUB_UPSTREAM_ALLOWLIST`（逗号分隔的 host、host:port 或 CIDR）通过 SSRF 检查后，服务端才 `POST` 该地址；成功为 `completed` 加 `output`，拒绝、超时或上游错误为 `failed`，不重试。未配置允许名单时不外呼。回环、链路本地和云元数据地址始终拒绝；RFC1918 仅在该 host 显式列入允许名单，或解析地址落在允许的 CIDR 内时放行。SkillHub 不内嵌执行器或 MCP。
+
+ChemBuddy 调用 SkillHub `POST /api/v1/agents/{id}/invoke`（`Authorization: Bearer sg_…`）。SkillHub 再向 Agent 的 `upstreamUrl` 提交 `{ receiptId, input, context, agent: { id, name, slug, persona, tools, skills } }`，其中 `skills` 只含当前调用者可读的快照（`skillId`、`version`、`name`、截断后的 `markdown`、`digest`）。上游以 `{ "output": "...", "meta"?: {} }` 应答；`meta` 不回传给调用方。3356 上需配置 `AGENTHUB_UPSTREAM_ALLOWLIST`；可选 `AGENTHUB_UPSTREAM_TIMEOUT_MS`（默认 60000，范围 1000–120000）和 `AGENTHUB_INVOKE_PROXY=0`（全站只回执）。
 
 ### 私有库、社区与管理员
 

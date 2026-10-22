@@ -24,9 +24,13 @@ export type SkillAccess = {
   resolveSlug: (userId: string, slug: string) => Promise<string | null | 'ambiguous'>;
   read: (userId: string, skillId: string, version?: string) => Promise<ReadableSkillVersion | null>;
 };
+export type AgentReceiptStatus = 'accepted' | 'completed' | 'failed';
+export type AgentReceiptError = { code: 'upstream_not_allowed' | 'upstream_failed' | 'upstream_timeout'; message: string };
 export type AgentReceipt = {
-  receiptId: string; status: 'accepted'; timestamp: string; input: string; context: unknown;
+  receiptId: string; status: AgentReceiptStatus; timestamp: string; input: string; context: unknown;
   skillsResolved: AgentSkillSnapshot[];
+  output?: string;
+  error?: AgentReceiptError;
   agent: { id: string; name: string; slug: string; status: AgentStatus; config: AgentConfig };
 };
 const SKILL_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -224,9 +228,12 @@ export function mapAgent(row: AgentRow): HubAgent {
     config: validateAgentConfig(parsed) as AgentConfig, status: row.status, createdAt: row.createdAt, updatedAt: row.updatedAt,
   };
 }
-export function agentReceipt(agent: HubAgent, invoke: AgentInvoke, timestamp = new Date().toISOString(), receiptId = crypto.randomUUID(), skillsResolved: AgentSkillSnapshot[] = []): AgentReceipt {
-  return {
-    receiptId, status: 'accepted', timestamp, input: invoke.input, context: invoke.context ?? null, skillsResolved,
+export function agentReceipt(agent: HubAgent, invoke: AgentInvoke, timestamp = new Date().toISOString(), receiptId = crypto.randomUUID(), skillsResolved: AgentSkillSnapshot[] = [], outcome: { status?: AgentReceiptStatus; output?: string; error?: AgentReceiptError } = {}): AgentReceipt {
+  const receipt: AgentReceipt = {
+    receiptId, status: outcome.status ?? 'accepted', timestamp, input: invoke.input, context: invoke.context ?? null, skillsResolved,
     agent: { id: agent.id, name: agent.name, slug: agent.slug, status: agent.status, config: agent.config },
   };
+  if (outcome.output !== undefined) receipt.output = outcome.output;
+  if (outcome.error) receipt.error = outcome.error;
+  return receipt;
 }
