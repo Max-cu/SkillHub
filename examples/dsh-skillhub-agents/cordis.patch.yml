@@ -1,0 +1,9 @@
+# SkillHub Agent 客户端。密钥写在 profile 的 cordis.patch.yml，不要写进仓库。
+# 覆盖这一行时要重写整个 config：Cordis patch 按行替换 config，不会合并字段。
+- insert:
+    - id: skillhub-agents
+      name: dsh-skillhub-agents
+      config:
+        baseUrl: http://10.2.14.138:3356
+        apiKey: ''
+        refreshIntervalMs: 0

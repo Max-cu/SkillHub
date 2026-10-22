@@ -1,0 +1,40 @@
+{
+  "name": "dsh-skillhub-agents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ChemBuddy / DeepSeek Harness sidecar that registers SkillHub Agents as local agent presets. It does not call SkillHub invoke.",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "src",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0",
+    "dsh": ">=0.1.7-alpha.1 <0.3.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.1",
+    "@deepseek-ai/schemastery": ">=3.18.1",
+    "@deepseek-ai/dsh-agent-preset-registry": ">=0.1.7-alpha.1",
+    "@deepseek-ai/dsh-persona": ">=0.1.7-alpha.1",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.7-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent-preset-registry": { "optional": true },
+    "@deepseek-ai/dsh-persona": { "optional": true },
+    "@deepseek-ai/dsh-skill-filesystem": { "optional": true }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

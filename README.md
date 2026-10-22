@@ -124,7 +124,9 @@ JSON 成功响应为 `{ "data": ... }`；列表的 data 包含 `items / total / 
 
 `/agents` 是 AgentHub 实体，与技能包上的 `agents` 兼容标签不是同一件事。列表默认且目前仅 `scope=mine`，按 `updated_at` 倒序，支持 `q`、`offset`、`limit`（默认 24，1–100）。创建、更新、删除和 `invoke` 需要写权限；只读 Key 可以查看自己的 Agent。`config` 保存人设、工具范围、技能引用和可选 `upstreamUrl`。`POST /agents/{id}/invoke` 的正文为 `{ "input": "...", "context": {} }`，需要写权限的 `sg_` Key。`upstreamUrl` 为空，或 `AGENTHUB_INVOKE_PROXY=0` 时，只返回 `accepted` 回执和 `skillsResolved`，不外呼。`upstreamUrl` 有值时，仅当 `AGENTHUB_UPSTREAM_ALLOWLIST`（逗号分隔的 host、host:port 或 CIDR）通过 SSRF 检查后，服务端才 `POST` 该地址；成功为 `completed` 加 `output`，拒绝、超时或上游错误为 `failed`，不重试。未配置允许名单时不外呼。回环、链路本地和云元数据地址始终拒绝；RFC1918 仅在该 host 显式列入允许名单，或解析地址落在允许的 CIDR 内时放行。SkillHub 不内嵌执行器或 MCP。
 
-ChemBuddy 调用 SkillHub `POST /api/v1/agents/{id}/invoke`（`Authorization: Bearer sg_…`）。SkillHub 再向 Agent 的 `upstreamUrl` 提交 `{ receiptId, input, context, agent: { id, name, slug, persona, tools, skills } }`，其中 `skills` 只含当前调用者可读的快照（`skillId`、`version`、`name`、截断后的 `markdown`、`digest`）。上游以 `{ "output": "...", "meta"?: {} }` 应答；`meta` 不回传给调用方。3356 上需配置 `AGENTHUB_UPSTREAM_ALLOWLIST`；可选 `AGENTHUB_UPSTREAM_TIMEOUT_MS`（默认 60000，范围 1000–120000）和 `AGENTHUB_INVOKE_PROXY=0`（全站只回执）。
+ChemBuddy 若把执行放在 SkillHub 上游，调用 `POST /api/v1/agents/{id}/invoke`（`Authorization: Bearer sg_…`）。SkillHub 再向 Agent 的 `upstreamUrl` 提交 `{ receiptId, input, context, agent: { id, name, slug, persona, tools, skills } }`，其中 `skills` 只含当前调用者可读的快照（`skillId`、`version`、`name`、截断后的 `markdown`、`digest`）。上游以 `{ "output": "...", "meta"?: {} }` 应答；`meta` 不回传给调用方。3356 上需配置 `AGENTHUB_UPSTREAM_ALLOWLIST`；可选 `AGENTHUB_UPSTREAM_TIMEOUT_MS`（默认 60000，范围 1000–120000）和 `AGENTHUB_INVOKE_PROXY=0`（全站只回执）。
+
+桌面端在本机跑 Agent 时不走 `invoke`。示例包 `examples/dsh-skillhub-agents` 用只读 `sg_` Key 拉取 `GET /agents?scope=mine`、`GET /agents/{id}` 和 `GET /skills/{id}/file`，把人设和技能原文注册为 ChemBuddy / deepseek-harness 的 agent preset。安装与包名映射见该目录的 README。
 
 ### 私有库、社区与管理员
 
