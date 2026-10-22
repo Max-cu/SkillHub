@@ -11,7 +11,7 @@ import AdminView,{CardCommunityButton,CommunityControls,CommunityModeration,Revi
 import type { Review } from '@/lib/community';
 import { api } from '@/lib/client-api';
 import { MAX_ZIP_BYTES } from '@/lib/package-limits.mjs';
-import { AGENTS, CATEGORIES, type Agent, type AgentStatus, type Category, type HubAgent, type Skill, type PackageMetadata } from '@/lib/types';
+import { AGENT_SKILL_ID, AGENTS, CATEGORIES, type Agent, type AgentSkillRef, type AgentStatus, type Category, type HubAgent, type Skill, type PackageMetadata } from '@/lib/types';
 
 gsap.registerPlugin(useGSAP);
 type View = 'discover' | 'agents' | 'favorites' | 'board' | 'api' | 'research' | 'admin';
@@ -254,6 +254,28 @@ function ApiView({meta,notify,copy}:{meta:Meta|null;notify:(s:string)=>void;copy
 }
 function KeyIcon(){return <LockKeyhole size={16} className="muted"/>;}
 const agentStatusLabel: Record<AgentStatus,string> = { draft:'草稿', published:'已发布' };
+function useAttachableSkills() {
+  const [skills,setSkills]=useState<Summary[]>([]),[error,setError]=useState(''),[loading,setLoading]=useState(true);
+  useEffect(()=>{
+    let current=true;
+    Promise.all([
+      api<{items:Summary[]}>('skills?scope=mine&limit=100'),
+      api<{items:Summary[]}>('skills?scope=community&limit=100'),
+    ]).then(([mine,community])=>{
+      if(!current)return;
+      const seen=new Set<string>();
+      const items:Summary[]=[];
+      for(const skill of [...mine.items,...community.items]){
+        if(!AGENT_SKILL_ID.test(skill.id)||seen.has(skill.id))continue;
+        seen.add(skill.id);items.push(skill);
+      }
+      setSkills(items);
+    }).catch(e=>{if(current)setError((e as Error).message);}).finally(()=>{if(current)setLoading(false);});
+    return()=>{current=false;};
+  },[]);
+  return {skills,error,loading};
+}
+function skillChoiceLabel(skill:Summary,pinned?:string){return skill.name+'@'+(pinned??skill.version);}
 function AgentHub({notify}:{notify:(message:string)=>void}) {
   const root=useRef<HTMLElement>(null);
   const [query,setQuery]=useState(''),[debounced,setDebounced]=useState(''),[agents,setAgents]=useState<HubAgent[]>([]),[total,setTotal]=useState(0),[loading,setLoading]=useState(true),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[moreLoading,setMoreLoading]=useState(false);
@@ -289,20 +311,31 @@ function AgentHub({notify}:{notify:(message:string)=>void}) {
   </>;
 }
 function AgentEditor({agent,onClose,onSaved}:{agent:HubAgent|null;onClose:()=>void;onSaved:(agent:HubAgent)=>void}) {
-  const [name,setName]=useState(agent?.name??''),[slug,setSlug]=useState(agent?.slug??''),[description,setDescription]=useState(agent?.description??''),[persona,setPersona]=useState(agent?.config.persona??''),[tools,setTools]=useState(agent?.config.tools.join(', ')??''),[upstreamUrl,setUpstreamUrl]=useState(agent?.config.upstreamUrl??''),[status,setStatus]=useState<AgentStatus>(agent?.status??'draft'),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const [name,setName]=useState(agent?.name??''),[slug,setSlug]=useState(agent?.slug??''),[description,setDescription]=useState(agent?.description??''),[persona,setPersona]=useState(agent?.config.persona??''),[tools,setTools]=useState(agent?.config.tools.join(', ')??''),[upstreamUrl,setUpstreamUrl]=useState(agent?.config.upstreamUrl??''),[status,setStatus]=useState<AgentStatus>(agent?.status??'draft'),[selected,setSelected]=useState<AgentSkillRef[]>(agent?.config.skills??[]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const catalog=useAttachableSkills();
+  const toggleSkill=(skillId:string)=>{
+    setError('');
+    setSelected(prev=>{
+      if(prev.some(ref=>ref.skillId===skillId))return prev.filter(ref=>ref.skillId!==skillId);
+      if(prev.length>=20){setError('最多挂载 20 个技能');return prev;}
+      return [...prev,{skillId}];
+    });
+  };
   const submit=async(e:FormEvent)=>{
     e.preventDefault();if(agent&&!slug.trim()){setError('请填写 slug');return;}
     setBusy(true);setError('');
-    const payload:Record<string,unknown>={name,description,status,config:{persona,tools:tools.split(/[,，]/).map(item=>item.trim()).filter(Boolean),upstreamUrl:upstreamUrl.trim()||null}};
+    const payload:Record<string,unknown>={name,description,status,config:{persona,tools:tools.split(/[,，]/).map(item=>item.trim()).filter(Boolean),skills:selected,upstreamUrl:upstreamUrl.trim()||null}};
     if(slug.trim())payload.slug=slug.trim();
     try{onSaved(await api<HubAgent>(agent?'agents/'+agent.id:'agents',{method:agent?'PATCH':'POST',body:JSON.stringify(payload)}));}
     catch(err){setError((err as Error).message);setBusy(false);}
   };
+  const known=new Set(catalog.skills.map(skill=>skill.id));
   return <Modal title={agent?'编辑 Agent':'新建 Agent'} onClose={onClose} wide><form className="publish-form" onSubmit={submit}>
     <div className="form-grid"><label className="field">名称<input value={name} onChange={e=>setName(e.target.value)} required maxLength={120} placeholder="例如：值班助手"/></label><label className="field">标识<input value={slug} onChange={e=>setSlug(e.target.value)} maxLength={100} placeholder={agent?'小写字母、数字和连字符':'留空则根据名称生成'} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" aria-label="Agent 标识"/></label></div>
     <label className="field">说明<textarea value={description} onChange={e=>setDescription(e.target.value)} maxLength={4000} rows={3} placeholder="这个 Agent 用来做什么"/></label>
     <label className="field">人设<textarea value={persona} onChange={e=>setPersona(e.target.value)} maxLength={20000} rows={5} placeholder="系统提示。只保存在这里，不会自动执行。"/></label>
     <div className="form-grid"><label className="field">工具范围<input value={tools} onChange={e=>setTools(e.target.value)} placeholder="以逗号分隔，例如 search, notes"/></label><label className="field">状态<select aria-label="Agent 状态" value={status} onChange={e=>setStatus(e.target.value as AgentStatus)}><option value="draft">草稿</option><option value="published">已发布</option></select></label></div>
+    <fieldset className="skill-ref-fieldset"><legend>挂载技能</legend><span>从我的技能和已进入社区的技能中选择，最多 20 个。只保存引用；未钉死的版本在调用时再解析。</span>{catalog.loading?<span>正在读取技能…</span>:catalog.skills.length||selected.some(ref=>!known.has(ref.skillId))?<div className="skill-ref-list">{catalog.skills.map(skill=>{const ref=selected.find(item=>item.skillId===skill.id);return <label key={skill.id}><input type="checkbox" checked={!!ref} onChange={()=>toggleSkill(skill.id)}/>{skillChoiceLabel(skill,ref?.version)}</label>;})}{selected.filter(ref=>!known.has(ref.skillId)).map(ref=><label key={ref.skillId}><input type="checkbox" checked onChange={()=>toggleSkill(ref.skillId)}/>{ref.version?ref.skillId+'@'+ref.version:ref.skillId}<small>当前列表中不可见</small></label>)}</div>:<span>还没有可挂载的技能。</span>}{catalog.error?<span>{catalog.error}</span>:null}</fieldset>
     <label className="field">上游地址<span>选填。本版只保存，不会请求该地址。</span><input value={upstreamUrl} onChange={e=>setUpstreamUrl(e.target.value)} maxLength={500} placeholder="https://example.internal/v1" inputMode="url"/></label>
     {error&&<div className="form-error" role="alert">{error}</div>}
     <div className="modal-footer"><button type="button" className="secondary-btn" onClick={onClose} disabled={busy}>取消</button><button className="primary-btn" disabled={busy||!name.trim()}>{busy&&<Loader2 size={15} className="spin"/>}{busy?'正在保存…':'保存'}</button></div>
@@ -310,6 +343,8 @@ function AgentEditor({agent,onClose,onSaved}:{agent:HubAgent|null;onClose:()=>vo
 }
 function AgentDetail({agent,onClose,onEdit,onDeleted,notify}:{agent:HubAgent;onClose:()=>void;onEdit:()=>void;onDeleted:()=>void;notify:(message:string)=>void}) {
   const [input,setInput]=useState(''),[context,setContext]=useState(''),[receipt,setReceipt]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[confirm,setConfirm]=useState(false),[deleting,setDeleting]=useState(false);
+  const catalog=useAttachableSkills();
+  const refs=agent.config.skills??[];
   const invoke=async(e:FormEvent)=>{
     e.preventDefault();setError('');
     let parsed:unknown;
@@ -328,6 +363,7 @@ function AgentDetail({agent,onClose,onEdit,onDeleted,notify}:{agent:HubAgent;onC
     {confirm&&<div className="delete-confirm" role="alertdialog" aria-label="确认删除 Agent"><span>永久删除「{agent.name}」？此操作不可恢复。</span><div className="delete-confirm-actions"><button className="secondary-btn" onClick={()=>setConfirm(false)} disabled={deleting}>取消</button><button className="primary-btn" disabled={deleting} onClick={remove}>{deleting&&<Loader2 size={14} className="spin"/>}{deleting?'正在删除…':'确认删除'}</button></div></div>}
     <form className="publish-form" onSubmit={invoke}>
       {agent.config.persona?<label className="field">人设<pre className="markdown-code">{agent.config.persona}</pre></label>:null}
+      <div className="field">挂载技能{refs.length?<ul className="skill-ref-list">{refs.map(ref=>{const found=catalog.skills.find(skill=>skill.id===ref.skillId);const version=ref.version??found?.version;return <li key={ref.skillId}>{found?found.name:ref.skillId}{version?<small>@{version}</small>:null}{!catalog.loading&&!found?<small>当前无法读取</small>:null}</li>;})}</ul>:<span>还没有挂载技能。</span>}</div>
       <p className="publish-privacy">{agent.config.tools.length?'工具范围：'+agent.config.tools.join('、'):'还没有声明工具范围。'}{agent.config.upstreamUrl?' 上游地址已保存，调用时不会请求它。':''}</p>
       <label className="field">调用输入<textarea value={input} onChange={e=>setInput(e.target.value)} required maxLength={20000} rows={4} placeholder="要交给这个 Agent 的内容"/></label>
       <label className="field">上下文 JSON<span>选填。只写入回执，不会执行。</span><textarea value={context} onChange={e=>setContext(e.target.value)} rows={3} placeholder='{"locale":"zh-CN"}'/></label>
