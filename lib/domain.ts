@@ -10,13 +10,14 @@ export async function digest(text: string | Uint8Array) {
   const hash = await crypto.subtle.digest('SHA-256', typeof text === 'string' ? new TextEncoder().encode(text) : Uint8Array.from(text).buffer);
   return 'sha256:' + Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, '0')).join('');
 }
-export function metadataSlug(name:string) {
+export function metadataSlug(name:string, fallback='skill') {
   const normalized=name.normalize('NFKD').replace(/[\u0300-\u036f]/g,'');
   const ascii=normalized.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
   if(ascii&&ascii.length<=80&&!/[^\x00-\x7f]/.test(normalized))return ascii;
   // This deterministic suffix identifies a display name, never an authentication identity or content digest.
   let hash=BigInt("14695981039346656037");for(const byte of new TextEncoder().encode(name))hash=BigInt.asUintN(64,(hash^BigInt(byte))*BigInt("1099511628211"));
-  return (ascii.slice(0,60).replace(/-$/,'')||'skill')+'-'+hash.toString(16).padStart(16,'0');
+  const prefix=/^[a-z][a-z0-9-]{0,20}$/.test(fallback)?fallback:'skill';
+  return (ascii.slice(0,60).replace(/-$/,'')||prefix)+'-'+hash.toString(16).padStart(16,'0');
 }
 export function parseSkill(markdown:string,context:{fallbackName?:string;defaultName?:string;preferredName?:string;preferredSlug?:string}={}) {
   if(typeof markdown!=='string'||!markdown.trim()||new TextEncoder().encode(markdown).length>MAX_MARKDOWN_BYTES||[...markdown].length>MAX_MARKDOWN_CHARACTERS)throw new ApiError(400,'invalid_markdown','SKILL.md 须为非空 UTF-8 文本，最多 200000 字符');
